@@ -695,7 +695,8 @@ let EDIT = false;
 
 /* ===================== 계산 ===================== */
 function calc(p){
-  const loads   = p.mats.map(m => m.load!=null ? m.load : (+m.k||0)*(+m.u||0));
+  const activeMats = p.mats.filter(m => !m.deleted);
+  const loads   = activeMats.map(m => m.load!=null ? m.load : (+m.k||0)*(+m.u||0));
   const loadSum = loads.reduce((a,b)=>a+b,0);
   const perLot  = p.pack>0 ? loadSum*1000/p.pack : 0;
   const out     = p.buyers.reduce((a,b)=>a+(+b.v||0),0);
@@ -706,7 +707,7 @@ function calc(p){
   const lot     = p.autoLot ? recLot : (+p.lot||0);
   const cap     = perLot*lot;
   const rest    = (+p.stock||0)+cap-out;
-  const rows = p.mats.map((m,i)=>{
+  const rows = activeMats.map((m,i)=>{
     const kt  = lot*(+m.k||0);            // 콘티총수량
     const cut = kt*(+m.u||0);             // 절단량 kg
     return {n:m.n, unit:+m.u||0, konti:+m.k||0, kt, cut,
@@ -808,9 +809,19 @@ function buildCards(){
              <input class="fname fsub" value="${esc(p.sub||'')}" data-ps="${p.id}"
                     placeholder="제품명 옆 설명 — 비우시면 안 보입니다" aria-label="제품 설명">`
           : `<h3>${esc(p.nm)}</h3>${p.sub?`<span class="sub">${esc(p.sub)}</span>`:''}`}
-        <span class="plot num" id="plot-${p.id}"></span>
+        <span style="display:flex;gap:6px;align-items:center;margin-left:auto">
+          <button class="mini ghost" data-unit="${p.id}" title="입력 단위 선택: 콘티 또는 kg" style="font-size:11px;padding:4px 9px">${p.unitLabel||'콘티'}</button>
+          <span class="plot num" id="plot-${p.id}"></span>
+        </span>
       </div>
       <div class="card-bd">
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line-2);font-size:11.5px">
+          ${p.mats.map((m,i)=>({m,i})).filter(x=>!x.m.deleted).map(({m,i})=>`<label style="display:flex;align-items:center;gap:4px">
+            <span style="color:var(--ink-2);font-weight:500">${esc(m.n)}</span>
+            <input type="number" value="${m.y||0.6}" data-p="${p.id}" data-k="yield" data-i="${i}" step="0.01" inputmode="decimal"
+                   style="font-size:11px;width:50px;padding:3px 5px;text-align:right;background:var(--input-bg);border:1px solid var(--input-line);border-radius:4px;color:var(--ink)">
+          </label>`).join('')}
+        </div>
         <div class="inrow">
           <div class="field" style="flex-basis:${p.stockW||DEFW}px">
             ${EDIT ? `<div class="fedit">
@@ -859,29 +870,33 @@ function buildCards(){
         <details class="konti">
           <summary>1회 배합 콘티수량${EDIT?' · 원재료 편집':' · 배합비'}</summary>
           <div class="inrow">
-            ${p.mats.map((m,i)=> EDIT
+            ${(()=>{ let vi=-1; return p.mats.map((m,i)=>{
+              if(!m.deleted) vi++;
+              const ri = vi;   // 배합비(ratio)/콘티수량 DOM id는 활성(비삭제) 원재료 순번 기준 — calc().rows와 일치시킴
+              if(m.deleted && !EDIT) return '';
+              return EDIT
               ? `<div class="matbox">
                    <div class="fedit" style="flex-direction:row;align-items:center;gap:3px">
-                     <input class="fname" value="${esc(m.n)}" data-mn="${p.id}|${i}" aria-label="원재료명">
-                     <button class="mini x keep" data-delm="${p.id}|${i}" title="이 원재료 없애기">✕</button>
+                     <input class="fname" value="${esc(m.n)}" data-mn="${p.id}|${i}" aria-label="원재료명"${m.deleted?' style="opacity:0.5"':''}>
+                     <button class="mini ${m.deleted?'':'x'} keep" data-${m.deleted?'recov':'delm'}="m-${p.id}-${i}" title="${m.deleted?'이 원재료 복원':'이 원재료 삭제'}" style="${m.deleted?'border-color:var(--leaf);color:var(--leaf)':''}">${m.deleted?'↩':'✕'}</button>
                    </div>
                    <div class="matgrid">
-                     <label class="mf"><span>콘티수량</span><input type="number" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal"></label>
-                     <label class="mf"><span>콘티 kg</span><input type="number" value="${m.u}" data-p="${p.id}" data-k="unit" data-i="${i}" step="any" inputmode="decimal"></label>
-                     <label class="mf"><span>기준수율</span><input type="number" value="${m.y}" data-p="${p.id}" data-k="yield" data-i="${i}" step="0.01" inputmode="decimal"></label>
+                     <label class="mf"><span>콘티수량</span><input type="number" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal"${m.deleted?' disabled':''}></label>
+                     <label class="mf"><span>콘티 kg</span><input type="number" value="${m.u}" data-p="${p.id}" data-k="unit" data-i="${i}" step="any" inputmode="decimal"${m.deleted?' disabled':''}></label>
+                     <label class="mf"><span>기준수율</span><input type="number" value="${m.y}" data-p="${p.id}" data-k="yield" data-i="${i}" step="0.01" inputmode="decimal"${m.deleted?' disabled':''}></label>
                    </div>
-                   <span style="font-size:10px;color:var(--ink-3)">배합비 <b id="ratio-${p.id}-${i}"></b></span>
+                   ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
                  </div>`
               : `<div class="field" style="flex-basis:${DEFW}px">
-                   <label for="kt-${p.id}-${i}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${i}"></span></label>
-                   <input class="val" type="number" id="kt-${p.id}-${i}" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal">
-                 </div>`).join('')}
+                   <label for="kt-${p.id}-${ri}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${ri}"></span></label>
+                   <input class="val" type="number" id="kt-${p.id}-${ri}" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal">
+                 </div>`; }).join(''); })()}
             ${EDIT?`<button class="mini keep" data-addm="${p.id}" style="padding:8px 11px;align-self:center">+ 원재료</button>`:''}
           </div>
           ${EDIT?`<div class="note">포장중량 <input type="number" value="${p.pack}" data-p="${p.id}" data-k="pack" step="any" inputmode="decimal"
                      style="font:inherit;font-size:12px;width:72px;text-align:right;padding:2px 5px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:5px;color:var(--ink)"> g/EA
                    — 이 값과 적재량으로 P/LOT가 정해집니다.</div>`
-                 : `<div class="note">콘티단위 ${p.mats.map(m=>esc(m.n)+' '+m.u+'kg').join(' · ')} — 배합비는 적재량 비율로 자동 역산됩니다.</div>`}
+                 : `<div class="note">콘티단위 ${p.mats.filter(m=>!m.deleted).map(m=>esc(m.n)+' '+m.u+'kg').join(' · ')} — 배합비는 적재량 비율로 자동 역산됩니다.</div>`}
         </details>
       </div>
     </div>`;
@@ -944,8 +959,10 @@ function floor(){
       <div class="fcard-hd"><h3>${esc(p.nm)}</h3><span class="lot num">${f2(c.lot)} LOT</span></div>
       <ul>${c.rows.map(r=>{
         const q = floorQty(r.kt, r.unit, U);
+        const primary = U==='kg' ? q.kg : q.konti;
+        const secondary = U==='kg' ? q.konti : q.kg;
         return `<li><span class="mn">${esc(r.n)}</span>
-          <span class="kt num">${q.konti}<small>${q.kg}</small></span></li>`;
+          <span class="kt num">${primary}<small>${secondary}</small></span></li>`;
       }).join('')}</ul>
     </div>`;
   }).join('');
@@ -1514,10 +1531,25 @@ document.addEventListener('click', e=>{
       if(inp){ inp.focus(); inp.select(); } }
     return;
   }
-  if(d.delm){                                 // 원재료 삭제
-    const [pid,i] = d.delm.split('|');
+  if(d.delm){                                 // 원재료 소프트 삭제 (계산에서 제외, 복원 가능)
+    const id = d.delm.slice(2);               // "m-" 접두어 제거
+    const li = id.lastIndexOf('-');
+    const pid = id.slice(0,li), i = id.slice(li+1);
     const p = S.products.find(x=>x.id===pid);
-    if(p && p.mats.length>1){ p.mats.splice(+i,1); rebuild(); }
+    if(p && p.mats[+i] && p.mats.filter(m=>!m.deleted).length>1){ p.mats[+i].deleted = true; rebuild(); }
+    return;
+  }
+  if(d.recov){                                // 원재료 복원
+    const id = d.recov.slice(2);
+    const li = id.lastIndexOf('-');
+    const pid = id.slice(0,li), i = id.slice(li+1);
+    const p = S.products.find(x=>x.id===pid);
+    if(p && p.mats[+i]){ delete p.mats[+i].deleted; rebuild(); }
+    return;
+  }
+  if(d.unit){                                 // 입력 단위 토글: 콘티 ↔ kg
+    const p = S.products.find(x=>x.id===d.unit);
+    if(p){ p.unitLabel = (p.unitLabel==='kg') ? '콘티' : 'kg'; rebuild(); }
     return;
   }
   if(d.addm){                                 // 원재료 추가
