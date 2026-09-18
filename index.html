@@ -640,7 +640,7 @@ function configSnapshot(){
 }
 function dayState(){
   return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, lot:+p.lot||0, autoLot:!!p.autoLot,
-    buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>({k:+m.k||0,u:+m.u||0,y:+m.y||0,load:m.load}))})),
+    buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>{ const d={k:+m.k||0,u:+m.u||0,y:+m.y||0}; if(m.load!=null) d.load=+m.load||0; return d; })})),
     rawOpen:clone(S.rawOpen), preOpen:clone(S.preOpen), rawIn:clone(S.rawIn),
     actRaw:clone(S.actRaw), actCut:clone(S.actCut)};
 }
