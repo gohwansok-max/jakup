@@ -571,21 +571,22 @@ const Store = {
     return null;
   },
 
-  saveConfig(){                       // 연타를 한 번으로 모아 저장
-    if(BOOTING) return;               // 첫 화면을 그리는 동안은 저장하지 않습니다(저장값 보호)
-    try{ localStorage.setItem(STORE, JSON.stringify(S)); }catch(e){}
+  saveConfig(immediate=false){             // 제품·거래처·카드 순서는 즉시, 나머지는 연타를 모아 저장
+    if(BOOTING) return;
+    const commit = async()=>{
+      const body = configSnapshot();
+      try{
+        if(this.mode==='firebase'){ const f=this._fb; await f.setDoc(f.doc(f.fs, FB_ROOT+'_config','master'), body); }
+        else if(this.mode==='claude') await this._db.doc('config/master').set(body);
+        flag('ok', this.label);
+      }catch(e){ flag('ro','저장 실패'); console.warn(e); }
+    };
+    try{ localStorage.setItem(STORE, JSON.stringify(configSnapshot())); }catch(e){}
     if(this.mode==='local' || !this.canWrite) return;
     clearTimeout(this._t);
     flag('busy','저장 중');
-    this._t = setTimeout(async()=>{
-      const body = {date:S.date, products:S.products, rawOpen:S.rawOpen, preOpen:S.preOpen,
-                    rawIn:S.rawIn, actRaw:S.actRaw, actCut:S.actCut, updatedAt:new Date().toISOString()};
-      try{
-        if(this.mode==='firebase'){ const f=this._fb; await f.setDoc(f.doc(f.fs, FB_ROOT+'_config','master'), body); }
-        else await this._db.doc('config/master').set(body);
-        flag('ok', this.label);
-      }catch(e){ flag('ro','저장 실패'); console.warn(e); }
-    }, 900);
+    if(immediate) return commit();
+    this._t = setTimeout(commit, 900);
   },
 
   /* 일일 기록 */
@@ -597,6 +598,14 @@ const Store = {
       else await this._db.doc('days/'+date).set(rec);
       return true;
     }catch(e){ console.warn(e); return false; }
+  },
+
+  async getDay(date){
+    try{
+      if(this.mode==='firebase'){ const f=this._fb, s=await f.getDoc(f.doc(f.fs, FB_ROOT+'_days', date)); return s.exists() ? s.data() : null; }
+      if(this.mode==='claude'){ const s=await this._db.doc('days/'+date).get(); return s.exists ? s.data() : null; }
+      return JSON.parse(localStorage.getItem('dkj-day-'+date)||'null');
+    }catch(e){ console.warn(e); return null; }
   },
 
   async allDays(){
@@ -621,7 +630,63 @@ function flag(kind, text){
   const e=document.getElementById('saveflag'); if(!e) return;
   e.className='saveflag '+(kind||''); e.textContent=text;
 }
-const save = ()=>Store.saveConfig();
+function configSnapshot(){
+  const products = clone(S.products).map(p=>{
+    p.stock=0; p.lot=0; p.autoLot=true;
+    p.buyers.forEach(b=>b.v=0);
+    return p;
+  });
+  return {version:4, date:S.date, products, updatedAt:new Date().toISOString()};
+}
+function dayState(){
+  return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, lot:+p.lot||0, autoLot:!!p.autoLot,
+    buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>({k:+m.k||0,u:+m.u||0,y:+m.y||0,load:m.load}))})),
+    rawOpen:clone(S.rawOpen), preOpen:clone(S.preOpen), rawIn:clone(S.rawIn),
+    actRaw:clone(S.actRaw), actCut:clone(S.actCut)};
+}
+function applyDayState(state){
+  const days=new Map((state.products||[]).map(p=>[p.id,p]));
+  S.products.forEach(p=>{
+    const d=days.get(p.id); if(!d) return;
+    p.stock=+d.stock||0; p.lot=+d.lot||0; p.autoLot=d.autoLot!==false;
+    p.buyers.forEach((b,i)=>{ if(d.buyers && d.buyers[i]!=null) b.v=+d.buyers[i]||0; });
+    p.mats.forEach((m,i)=>{ const dm=d.mats&&d.mats[i]; if(!dm) return;
+      if(dm.k!=null) m.k=+dm.k||0; if(dm.u!=null) m.u=+dm.u||0; if(dm.y!=null) m.y=+dm.y||0;
+      if(dm.load==null) delete m.load; else m.load=+dm.load||0;
+    });
+  });
+  S.rawOpen={...ZERO(),...(state.rawOpen||{})}; S.preOpen={...ZERO(),...(state.preOpen||{})};
+  S.rawIn={...ZERO(),...(state.rawIn||{})}; S.actRaw={...ZERO(),...(state.actRaw||{})}; S.actCut={...ZERO(),...(state.actCut||{})};
+}
+function blankDay(){
+  S.products.forEach(p=>{ p.stock=0; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
+  S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
+}
+let DAY_SAVE_TIMER=null, IGNORE_SAVE=false;
+function queueDaySave(immediate=false){
+  if(BOOTING || IGNORE_SAVE) return;
+  const commit=()=>{ DAY_SAVE_TIMER=null; saveToday(true); };
+  clearTimeout(DAY_SAVE_TIMER);
+  if(immediate) commit(); else DAY_SAVE_TIMER=setTimeout(commit,900);
+}
+function save(immediate=false){
+  if(IGNORE_SAVE) return;
+  Store.saveConfig(immediate); queueDaySave(immediate);
+}
+async function switchDay(date){
+  if(!date || date===S.date) return;
+  await saveToday(true);                         // 현재 날짜의 입력값을 먼저 확정 저장
+  const rec=await Store.getDay(date);
+  S.date=date;
+  if(rec && rec.state) applyDayState(rec.state);
+  else blankDay();
+  document.getElementById('workdate').value=S.date;
+  REC.anchor=new Date(S.date+'T00:00:00');
+  IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
+  if(!rec) queueDaySave(true);
+  setText('bkmsg', rec && !rec.state ? '이전 형식의 요약 기록입니다. 상세 입력값은 이번 버전부터 날짜별로 저장됩니다.' :
+                    (rec ? S.date+' 입력 DB를 불러왔습니다.' : S.date+'은 새 입력 화면입니다.'));
+}
 
 const addDay = (d,n)=>{ const t=new Date(d+'T00:00:00'); t.setDate(t.getDate()+n);
   return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; };
@@ -672,6 +737,7 @@ function clearProduct(id){
          timer:setTimeout(()=>{ CLR=null; refreshCards(); }, 8000)};
   p.buyers.forEach(b=>b.v=0);
   p.lot = 0; p.autoLot = true;      // 오늘 안 나가는 제품이니 현장 지시서에서도 빠집니다
+  save(true);                        // 비우기 직전 상태와 변경값을 날짜 DB에 즉시 반영
   refresh(); syncOutInputs(p);
 }
 function undoClear(){
@@ -721,6 +787,7 @@ function moveProduct(id, dir){
   while(j >= 0 && j < L.length && L[j].hidden) j += dir;
   if(j < 0 || j >= L.length) return;
   [L[i], L[j]] = [L[j], L[i]];
+  save(true);                               // 카드 순서는 클릭 즉시 저장해 새로고침에도 유지합니다
   rebuild();
 }
 
@@ -1008,7 +1075,7 @@ function refreshSum(){
 /* 작업 마감 → 그날 기록 저장 후 내일로 이월 */
 async function closeDay(){
   await saveToday(true);          // 먼저 오늘 기록을 남깁니다
-  const t = matTotals();
+  const t = matTotals(), today=S.date;
   S.prev = clone({date:S.date, rawOpen:S.rawOpen, preOpen:S.preOpen, rawIn:S.rawIn,
                   actRaw:S.actRaw, actCut:S.actCut,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
@@ -1016,15 +1083,15 @@ async function closeDay(){
   const ro={}, po={};
   matList().forEach(m=>{ const r=stockRow(m,t); ro[m]=Math.max(0,r.rawClose); po[m]=r.preClose; });
   S.rawOpen=ro; S.preOpen=po; S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
-  S.products.forEach(p=>{
-    p.buyers.forEach(b=>b.v=0);      // 출고량은 새 발주서 보고 다시 입력
-    p.lot = 0; p.autoLot = true;     // LOT는 출고량 넣으면 자동으로 잡힘
-  });
-  S.date = addDay(S.date,1);
-  document.getElementById('workdate').value = S.date;
-  REC.anchor = new Date(S.date+'T00:00:00');
+  S.products.forEach(p=>{ p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true; });
+  const next=addDay(today,1), existing=await Store.getDay(next);
+  S.date=next;
+  if(existing && existing.state) applyDayState(existing.state); // 이미 입력한 다음 날짜는 덮어쓰지 않습니다
+  document.getElementById('workdate').value=S.date;
+  REC.anchor=new Date(S.date+'T00:00:00');
   rebuild();
-  setText('bkmsg', `${S.prev.date} 기록을 저장하고 ${S.date}로 넘겼습니다.`);
+  await saveToday(true);
+  setText('bkmsg', today+' 기록을 저장하고 '+S.date+' 입력 DB로 넘겼습니다.');
 }
 function undoClose(){
   if(!S.prev) return;
@@ -1084,7 +1151,7 @@ function buildDayRecord(){
   return {date:S.date, savedAt:new Date().toISOString(),
           tot:{cap:sum('cap'), out:sum('out'), cut:+sum('cut').toFixed(1), raw:+sum('raw').toFixed(1),
                lots:+sum('lot').toFixed(2)},
-          products, mats};
+          products, mats, state:dayState()};
 }
 
 const REC = {unit:'month', anchor:new Date('2026-09-01T00:00:00'), days:[], loaded:false};
@@ -1415,10 +1482,7 @@ document.addEventListener('input', e=>{
     refreshSum(); save(); return;
   }
   if(t.id==='workdate'){
-    S.date = t.value;
-    setText('floor-date',S.date); setText('log-date',S.date);
-    setText('sum-date',S.date); setText('next-date',addDay(S.date,1));
-    save();
+    switchDay(t.value);              // 날짜만 바꾸지 않고 해당 날짜의 상세 입력 DB를 불러옵니다
   }
 });
 
@@ -1530,6 +1594,7 @@ document.addEventListener('change', e=>{
   flags(); rebuild();                       // 저장소를 기다리지 않고 먼저 그립니다
   await Store.init();
   const cfg = await Store.loadConfig();
+  let legacy=false;
   if(cfg && Array.isArray(cfg.products) && cfg.products.length){
     S.date    = cfg.date    || S.date;
     S.products= cfg.products;
@@ -1538,11 +1603,17 @@ document.addEventListener('change', e=>{
     S.rawIn   = cfg.rawIn   || S.rawIn;
     S.actRaw  = cfg.actRaw  || ZERO();
     S.actCut  = cfg.actCut  || ZERO();
+    legacy=!cfg.version;
+    if(!legacy){
+      const active=await Store.getDay(S.date);
+      if(active && active.state) applyDayState(active.state); else blankDay();
+    }
     document.getElementById('workdate').value = S.date;
-    rebuild();
+    IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
   }
   REC.anchor = new Date(S.date+'T00:00:00');
   BOOTING = false;                          // 이제부터 변경분을 저장합니다
+  if(legacy) await saveToday(true);          // 기존 화면의 마지막 입력값을 날짜 DB로 1회 이전
   flag(Store.mode==='local' ? 'local' : (Store.canWrite ? 'ok' : 'ro'), Store.label);
   const e=document.getElementById('saveflag');
   if(e) e.title = Store.mode==='firebase' ? '실시간 공유 저장소에 연결돼 있습니다.'
