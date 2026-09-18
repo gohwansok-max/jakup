@@ -1,12 +1,7 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>동김제 작업지시 계산판</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<title>동김제 작업지시 계산판</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
 :root{
   --paper:#F6F8F3; --surface:#FFFFFF; --surface-2:#FBFCF9;
@@ -253,72 +248,17 @@ td.short{color:var(--alert); font-weight:700}
 [hidden]{display:none !important}
 @media (max-width:520px){ .res{grid-template-columns:repeat(2,1fr)} .brand h1{font-size:15px} }
 @media print{
-  @page{ size:A4; margin:10mm; }
   .topbar,.printbar,.hint,.flag,.note,.toolbar,.hidden-box{display:none !important}
-  body{background:#fff; font-size:10px; margin:0; padding:0}
-  .wrap{padding:10px 0; max-width:none; margin:0}
-
-  /* 섹션별 한 페이지 설정 */
-  #v-input, #v-floor, #v-sum, #v-log, #v-rec{ page-break-after:avoid; page-break-inside:avoid }
-
-  /* 카드/표 최적화 */
-  .fcard,.tablewrap,.card{box-shadow:none; break-inside:avoid; page-break-inside:avoid}
-  .card{margin-bottom:8px}
-  .grid{gap:8px; grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
-
-  /* 현장 작업지시 */
-  .floor{grid-template-columns:repeat(2,1fr); gap:6px}
-  .fcard-hd{background:#ddd !important; color:#000 !important; padding:6px 10px; font-size:10px}
-  .fcard-hd h3{font-size:11px; margin:0}
-  .fcard-hd .lot{font-size:13px}
-  .fcard li{padding:3px 8px; font-size:9.5px}
-  .fcard li .kt{font-size:12px}
-  .fcard li .kt small{font-size:9px}
-
-  /* 표 최적화 */
-  table{font-size:9px; min-width:auto}
-  th,td{padding:4px 6px; font-size:9px}
-  th:first-child,td:first-child{font-size:9px}
-  .secttl{margin:12px 0 6px; gap:6px}
-  .secttl h2{font-size:13px}
-
-  /* 입력 카드 최적화 */
-  .card-hd{padding:8px 10px; gap:6px}
-  .card-hd h3{font-size:13px}
-  .card-bd{padding:8px 10px; gap:6px}
-  .inrow{gap:6px}
-  .field{min-width:50px}
-  .field > label{font-size:9px}
-  .field input.val{padding:4px 6px; font-size:10px}
-
-  /* LOT 라인 */
-  .lotline{gap:6px}
-  .lotline .lbl{font-size:10px}
-  .lotline input{font-size:12px; width:70px; padding:3px 5px}
-
-  /* 결과 수치 */
-  .res{gap:6px}
-  .res dt{font-size:9px}
-  .res dd{font-size:13px}
-
-  /* 배합 상세 */
-  details.konti summary{font-size:10px}
-  .matbox{padding:5px 6px; font-size:9px}
-  .matgrid .mf input{font-size:10px; padding:2px 4px}
-
-  /* 위치 고정 해제 */
+  body{background:#fff; font-size:11px}
+  .wrap{padding:0; max-width:none}
+  .fcard,.tablewrap,.card{box-shadow:none; break-inside:avoid}
+  .floor{grid-template-columns:repeat(4,1fr); gap:7px}
+  .fcard-hd{background:#eee !important; color:#000 !important}
   th,th:first-child,td:first-child{position:static}
-
-  /* 가시성 개선 */
-  .tile{padding:10px 12px; margin-bottom:6px}
-  .tile dt{font-size:9px}
-  .tile dd{font-size:18px}
-  .backup{padding:10px 12px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
 </style>
-</head>
-<body>
+
 <div class="topbar">
   <div class="topbar-in">
     <div class="brand">
@@ -1436,8 +1376,8 @@ document.addEventListener('input', e=>{
     const v = num(t.value);
     if(d.k==='stock')      p.stock = v;
     else if(d.k==='out')   p.buyers[+d.i].v = v;
-    else if(d.k==='konti') p.mats[+d.i].k = v;
-    else if(d.k==='unit')  p.mats[+d.i].u = v;
+    else if(d.k==='konti') { p.mats[+d.i].k = v; delete p.mats[+d.i].load; }
+    else if(d.k==='unit')  { p.mats[+d.i].u = v; delete p.mats[+d.i].load; }
     else if(d.k==='yield') p.mats[+d.i].y = v;
     else if(d.k==='pack')  p.pack = v;
     else if(d.k==='lot'){  p.lot = v; p.autoLot = false; }   // 직접 치면 수동으로 잠금
@@ -1615,5 +1555,3 @@ document.addEventListener('change', e=>{
   }
 })();
 </script>
-</body>
-</html>
