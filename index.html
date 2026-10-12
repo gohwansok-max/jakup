@@ -345,7 +345,8 @@ td.short{color:var(--alert); font-weight:700}
     </div>
     <div class="secttl"><h2>원물 재고와 1층 요청량</h2><span id="sum-date"></span></div>
     <div class="tablewrap"><table id="sumtbl"></table></div>
-    <div class="note">실제 썰 양 = 작업지시 절단량 − 어제 썰어 놓은 것 · 필요한 원물 = 실제 썰 양 ÷ 기준수율(제품 가중평균)<br>
+    <div class="note"><b>기준수율은 원재료 1개당 값 1개입니다.</b> 여기서 고치면 이 원재료를 쓰는 모든 제품에 자동으로 반영됩니다(제품 카드에서는 더 이상 따로 입력하지 않습니다).<br>
+    실제 썰 양 = 작업지시 절단량 − 어제 썰어 놓은 것 · 필요한 원물 = 실제 썰 양 ÷ 기준수율<br>
     내일로 넘길 원물 = 어제 남은 원물 + 1층에서 올린 양 − 필요한 원물. 이 값이 빨갛게 마이너스로 뜨면 원물을 그만큼 더 올려야 오늘 작업이 끝납니다.</div>
   </section>
 
@@ -480,6 +481,28 @@ const DEFAULT_PRODUCTS = [
 ];
 
 const MATS = ['로메인','프릴','카이피라','라디치오','케일','치커리','적근대','적채','양배추','당근','양상추'];
+/* 원재료별 기준수율 — 2026-09-15 통화·작업예시서 근거(설계_생산일지_자동화_Rev1). 2026-10-12 통화로 제품별 입력을 폐지하고
+   이 표(원재료 1개당 값 1개)로 단일화했습니다 — 권화선 팀장님: "로메인이면 로메인 수율을 딱 넣으면 자동으로 들어가게". */
+const DEFAULT_YIELD = {로메인:.60, 프릴:.63, 카이피라:.64, 라디치오:.68, 케일:.77, 치커리:.60, 적근대:.66, 적채:.90, 양배추:.75, 당근:.75, 양상추:.50};
+const matYield = name => { const v = S.matYield && S.matYield[name]; return (v>0) ? v : (DEFAULT_YIELD[name] || 0.6); };
+/* 기존 제품별 수율값이 흩어져 있던 1회성 자료를 원재료 1개당 값 1개로 정리합니다(최빈값 채택, 없으면 기준표). */
+function migrateMatYield(){
+  if(S.matYield && Object.keys(S.matYield).length) return;
+  const counts = {};
+  S.products.forEach(p=>p.mats.forEach(m=>{
+    if(!m.n || !(+m.y>0)) return;
+    const v = (+m.y).toFixed(4);
+    (counts[m.n]=counts[m.n]||{})[v] = (counts[m.n][v]||0)+1;
+  }));
+  const result = {};
+  Object.keys(counts).forEach(name=>{
+    let best=null, bestN=-1;
+    Object.entries(counts[name]).forEach(([v,n])=>{ if(n>bestN){ bestN=n; best=v; } });
+    result[name] = best!=null ? +best : (DEFAULT_YIELD[name]||0.6);
+  });
+  matList().forEach(name=>{ if(result[name]==null) result[name] = DEFAULT_YIELD[name]||0.6; });
+  S.matYield = result;
+}
 /* 어제 남은 원물 (2층, 썰기 전) — 합계 시트 10행 */
 const RAW0 = {로메인:433,프릴:144,카이피라:88,라디치오:420,케일:0,치커리:24,적근대:30,적채:50,양배추:12,당근:0,양상추:0};
 /* 어제 썰어 놓은 것 (전처리 완료품) — 합계 시트 13행 */
@@ -506,7 +529,7 @@ const FB_ROOT = "dkj";      // 여러 사업장을 한 프로젝트에서 쓰실
 const clone = o => JSON.parse(JSON.stringify(o));
 const fresh = ()=>({ date:'2026-09-01', products:clone(DEFAULT_PRODUCTS),
                      rawOpen:{...RAW0}, preOpen:{...PRE0}, rawIn:ZERO(),
-                     actRaw:ZERO(), actCut:ZERO(), prev:null });   // 실측(작업 후 입력)
+                     actRaw:ZERO(), actCut:ZERO(), prev:null, matYield:{} });   // 실측(작업 후 입력)
 
 let S = fresh();
 if(!S.actRaw) S.actRaw=ZERO();
@@ -636,7 +659,7 @@ function configSnapshot(){
     p.buyers.forEach(b=>b.v=0);
     return p;
   });
-  return {version:4, date:S.date, products, updatedAt:new Date().toISOString()};
+  return {version:4, date:S.date, products, matYield:clone(S.matYield||{}), updatedAt:new Date().toISOString()};
 }
 function dayState(){
   return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, lot:+p.lot||0, autoLot:!!p.autoLot,
@@ -711,7 +734,7 @@ function calc(p){
     const kt  = lot*(+m.k||0);            // 콘티총수량
     const cut = kt*(+m.u||0);             // 절단량 kg
     return {n:m.n, unit:+m.u||0, konti:+m.k||0, kt, cut,
-            raw:(+m.y>0)? cut/m.y : 0, ratio: loadSum? loads[i]/loadSum : 0};
+            raw: cut/matYield(m.n), ratio: loadSum? loads[i]/loadSum : 0};
   });
   return {perLot, out, need, recLot, lot, cap, rest, rows, loadSum};
 }
@@ -810,18 +833,11 @@ function buildCards(){
                     placeholder="제품명 옆 설명 — 비우시면 안 보입니다" aria-label="제품 설명">`
           : `<h3>${esc(p.nm)}</h3>${p.sub?`<span class="sub">${esc(p.sub)}</span>`:''}`}
         <span style="display:flex;gap:6px;align-items:center;margin-left:auto">
-          <button class="mini ghost" data-unit="${p.id}" title="입력 단위 선택: 콘티 또는 kg" style="font-size:11px;padding:4px 9px">${p.unitLabel||'콘티'}</button>
+          <button class="mini ghost" data-ulabel="${p.id}" title="입력 단위 선택: 콘티 또는 kg" style="font-size:11px;padding:4px 9px">${p.unitLabel||'콘티'}</button>
           <span class="plot num" id="plot-${p.id}"></span>
         </span>
       </div>
       <div class="card-bd">
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line-2);font-size:11.5px">
-          ${p.mats.map((m,i)=>({m,i})).filter(x=>!x.m.deleted).map(({m,i})=>`<label style="display:flex;align-items:center;gap:4px">
-            <span style="color:var(--ink-2);font-weight:500">${esc(m.n)}</span>
-            <input type="number" value="${m.y||0.6}" data-p="${p.id}" data-k="yield" data-i="${i}" step="0.01" inputmode="decimal"
-                   style="font-size:11px;width:50px;padding:3px 5px;text-align:right;background:var(--input-bg);border:1px solid var(--input-line);border-radius:4px;color:var(--ink)">
-          </label>`).join('')}
-        </div>
         <div class="inrow">
           <div class="field" style="flex-basis:${p.stockW||DEFW}px">
             ${EDIT ? `<div class="fedit">
@@ -883,9 +899,8 @@ function buildCards(){
                    <div class="matgrid">
                      <label class="mf"><span>콘티수량</span><input type="number" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal"${m.deleted?' disabled':''}></label>
                      <label class="mf"><span>콘티 kg</span><input type="number" value="${m.u}" data-p="${p.id}" data-k="unit" data-i="${i}" step="any" inputmode="decimal"${m.deleted?' disabled':''}></label>
-                     <label class="mf"><span>기준수율</span><input type="number" value="${m.y}" data-p="${p.id}" data-k="yield" data-i="${i}" step="0.01" inputmode="decimal"${m.deleted?' disabled':''}></label>
                    </div>
-                   ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
+                   ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">기준수율 <b>${(matYield(m.n)*100).toFixed(0)}%</b>(③탭에서 조정) · 배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
                  </div>`
               : `<div class="field" style="flex-basis:${DEFW}px">
                    <label for="kt-${p.id}-${ri}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${ri}"></span></label>
@@ -1017,11 +1032,17 @@ const stockCell = (id,val,label,key,ph)=>
      aria-label="${esc(label)} ${ph}"
      style="font:inherit;font-size:13px;text-align:right;width:82px;padding:3px 7px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:6px;color:var(--ink);font-variant-numeric:tabular-nums"></td>`;
 
+const yieldCell = m =>
+  `<td><input type="number" id="my-${esc(m)}" value="${(matYield(m)*100).toFixed(0)}" data-matyield="${esc(m)}" step="1" min="1" max="100" inputmode="decimal"
+     aria-label="${esc(m)} 기준수율(%)"
+     style="font:inherit;font-size:13px;text-align:right;width:52px;padding:3px 7px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:6px;color:var(--ink);font-variant-numeric:tabular-nums">%</td>`;
+
 function buildSum(){
   document.getElementById('sumtbl').innerHTML =
    `<thead>
      <tr>
        <th rowspan="2">원재료</th>
+       <th rowspan="2" style="color:var(--edit)">기준수율</th>
        <th colspan="2" class="grp">어제 넘어온 것</th>
        <th colspan="2" class="grp">오늘 썰 양</th>
        <th colspan="3" class="grp">원물</th>
@@ -1033,10 +1054,13 @@ function buildSum(){
        <th>작업지시 절단량</th><th>실제 썰 양</th>
        <th>필요한 원물</th><th>1층에서 올린 양</th><th>1층에 더 올릴 양</th>
        <th>원물</th><th>절단품</th>
-       <th>실제 투입 원물</th><th>실제 절단 산출</th><th>실적수율</th><th>기준 대비</th>
+       <th>실제 투입 원물<br><small style="font-weight:400">(사용량·재고 아님)</small></th>
+       <th>실제 절단 산출<br><small style="font-weight:400">(썰어낸 양)</small></th>
+       <th>실적수율</th><th>기준 대비</th>
      </tr></thead><tbody>
    ${matList().map(m=>`<tr>
        <td>${esc(m)}</td>
+       ${yieldCell(m)}
        ${stockCell('ro-'+m, +S.rawOpen[m]||0, m, 'rawopen', '어제 남은 원물')}
        ${stockCell('po-'+m, +S.preOpen[m]||0, m, 'preopen', '어제 썰어 놓은 것')}
        <td class="num" id="s-need-${esc(m)}"></td>
@@ -1050,7 +1074,7 @@ function buildSum(){
        ${stockCell('ac-'+m, +S.actCut[m]||0, m, 'actcut', '실제 절단 산출')}
        <td class="num" id="s-ya-${esc(m)}"></td>
        <td class="num" id="s-dv-${esc(m)}"></td></tr>`).join('')}
-   <tr class="total"><td>합계</td>
+   <tr class="total"><td>합계</td><td></td>
      <td class="num" id="t-ro"></td><td class="num" id="t-po"></td>
      <td class="num" id="t-need"></td><td class="num" id="t-cut"></td>
      <td class="num" id="t-use"></td><td class="num" id="t-ri"></td><td class="num" id="t-short"></td>
@@ -1239,8 +1263,9 @@ function renderRec(){
     setText('rec-sub3','실측 입력 없음');
     document.getElementById('yieldnote').innerHTML =
       '수율을 보시려면 ③ 원물 소요·부족 화면 오른쪽 <b>작업 끝나고 넣는 실적</b>에 ' +
-      '원재료별 <b>실제 투입 원물</b>과 <b>실제 절단 산출</b>을 넣으셔야 합니다. ' +
-      '이 값이 없으면 위 표의 수율은 <b>기준수율을 되비춘 값</b>이라 개선 여부를 볼 수 없습니다.';
+      '원재료별 <b>실제 투입 원물</b>(오늘 실제로 쓴 원물 사용량)과 <b>실제 절단 산출</b>(그 원물을 썰어서 나온 절단품 양)을 넣으셔야 합니다. ' +
+      '남아서 내일로 넘기는 재고량은 이 칸이 아니라 같은 화면의 <b>내일로 넘길 것</b> 칸에 자동으로 표시됩니다. ' +
+      '실적을 안 넣으면 위 표의 수율은 <b>기준수율을 되비춘 값</b>이라 개선 여부를 볼 수 없습니다.';
     return;
   }
 
@@ -1462,7 +1487,6 @@ document.addEventListener('input', e=>{
     else if(d.k==='out')   p.buyers[+d.i].v = v;
     else if(d.k==='konti') { p.mats[+d.i].k = v; delete p.mats[+d.i].load; }
     else if(d.k==='unit')  { p.mats[+d.i].u = v; delete p.mats[+d.i].load; }
-    else if(d.k==='yield') p.mats[+d.i].y = v;
     else if(d.k==='pack')  p.pack = v;
     else if(d.k==='lot'){  p.lot = v; p.autoLot = false; }   // 직접 치면 수동으로 잠금
     refresh(); return;
@@ -1497,6 +1521,13 @@ document.addEventListener('input', e=>{
     if(d.actraw)  S.actRaw[d.actraw]   = v;
     if(d.actcut)  S.actCut[d.actcut]   = v;
     refreshSum(); save(); return;
+  }
+  if(d.matyield){                             // 원재료 기준수율(%) — 원재료 1개당 값 1개, 모든 제품에 즉시 반영
+    const pct = Math.max(1, Math.min(100, num(t.value)));
+    S.matYield = S.matYield || {};
+    S.matYield[d.matyield] = pct/100;
+    refreshCards(); floor(); refreshSum(); logview(); save();
+    return;
   }
   if(t.id==='workdate'){
     switchDay(t.value);              // 날짜만 바꾸지 않고 해당 날짜의 상세 입력 DB를 불러옵니다
@@ -1547,8 +1578,8 @@ document.addEventListener('click', e=>{
     if(p && p.mats[+i]){ delete p.mats[+i].deleted; rebuild(); }
     return;
   }
-  if(d.unit){                                 // 입력 단위 토글: 콘티 ↔ kg
-    const p = S.products.find(x=>x.id===d.unit);
+  if(d.ulabel){                                // 입력 단위 토글: 콘티 ↔ kg (⑤탭 집계단위 data-unit과 충돌 방지 위해 별도 속성 사용)
+    const p = S.products.find(x=>x.id===d.ulabel);
     if(p){ p.unitLabel = (p.unitLabel==='kg') ? '콘티' : 'kg'; rebuild(); }
     return;
   }
@@ -1635,6 +1666,8 @@ document.addEventListener('change', e=>{
     S.rawIn   = cfg.rawIn   || S.rawIn;
     S.actRaw  = cfg.actRaw  || ZERO();
     S.actCut  = cfg.actCut  || ZERO();
+    S.matYield= cfg.matYield|| {};
+    migrateMatYield();                       // 처음 한 번만: 제품별로 흩어진 수율을 원재료별 1개 값으로 정리
     legacy=!cfg.version;
     if(!legacy){
       const active=await Store.getDay(S.date);
@@ -1642,7 +1675,7 @@ document.addEventListener('change', e=>{
     }
     document.getElementById('workdate').value = S.date;
     IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
-  }
+  } else { migrateMatYield(); rebuild(); }
   REC.anchor = new Date(S.date+'T00:00:00');
   BOOTING = false;                          // 이제부터 변경분을 저장합니다
   if(legacy) await saveToday(true);          // 기존 화면의 마지막 입력값을 날짜 DB로 1회 이전
