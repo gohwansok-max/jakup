@@ -923,12 +923,6 @@ function buildCards(){
               : `<div class="field" style="flex-basis:${DEFW}px">
                    <label for="kt-${p.id}-${ri}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${ri}"></span></label>
                    <input class="val" type="number" id="kt-${p.id}-${ri}" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal">
-                   <div style="display:flex;align-items:center;gap:4px;margin-top:5px;font-size:11px;color:var(--ink-3)">
-                     기준수율
-                     <input type="number" class="matyield-inline" value="${(matYield(m.n)*100).toFixed(0)}" data-matyield="${esc(m.n)}"
-                            step="1" min="1" max="100" inputmode="decimal" aria-label="${esc(m.n)} 기준수율(%)"
-                            style="width:46px;font:inherit;font-size:12px;text-align:right;padding:2px 5px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:5px;color:var(--ink)">%
-                   </div>
                  </div>`; }).join(''); })()}
             ${EDIT?`<button class="mini keep" data-addm="${p.id}" style="padding:8px 11px;align-self:center">+ 원재료</button>`:''}
           </div>
