@@ -296,7 +296,8 @@ td.short{color:var(--alert); font-weight:700}
     </div>
 
     <div class="hint" id="hint-normal">
-      <div><b>노란 칸만 채우십시오.</b> 거래처별 출고량(EA)과 전일재고만 넣으면 필요 LOT·콘티수량·원물 소요량·현장 지시서가 전부 자동으로 나옵니다.
+      <div><b>노란 칸만 채우십시오.</b> 거래처별 출고량(EA)만 넣으면 필요 LOT·콘티수량·원물 소요량·현장 지시서가 전부 자동으로 나옵니다.
+      <b>전일재고는 ③ 원물 소요·부족 화면에서 작업 마감을 누르시면 다음 날로 자동으로 넘어가 채워집니다</b>(직접 입력하실 필요 없습니다 — 실사값으로 고치고 싶으시면 그냥 덮어쓰시면 됩니다).
       오늘 안 나가는 제품은 칸 끝의 <b>비우기</b>를 누르시면 그 제품 출고 수량이 한 번에 0이 됩니다(잘못 누르셨으면 바로 <b>되돌리기</b>).
       물량이 모자라면 LOT를 직접 올리거나, 아래 <b>1회 배합 콘티수량</b>을 펴서 배합을 조정하십시오.
       <br>지금 화면에는 <b>2026-09-01 작업예시서의 실제 값</b>이 예시로 들어가 있습니다. 입력하신 내용은 이 브라우저에 자동 저장됩니다.</div>
@@ -340,14 +341,15 @@ td.short{color:var(--alert); font-weight:700}
       <div><b>어제 남은 원물 → 어제 썰어 놓은 것 → 오늘 썰 양 → 필요한 원물</b> 순서로 읽으시면 됩니다.
       썰어 놓은 것이 있으면 그만큼 오늘 덜 썰고, 그만큼 원물도 덜 올리면 됩니다.
       <b>1층에 더 올릴 양</b>이 빨갛게 뜨면 그게 곧 1층 지시량이자 업체 발주량입니다.
-      <br><b>작업 마감</b>을 누르면 오늘 남은 원물·절단품이 다음 날 「어제 넘어온 것」으로 그대로 넘어가고, 출고량은 새 발주서를 받아 넣으실 수 있게 비워집니다.
+      <br><b>작업 마감</b>을 누르면 오늘 남은 원물·절단품과 제품별 잔여재고(전일재고)가 다음 날로 그대로 넘어가고, 출고량은 새 발주서를 받아 넣으실 수 있게 비워집니다.
+      <b>오른쪽 「작업 끝나고 넣는 실적」에 실제 투입 원물·실제 절단 산출을 넣으시면, 이론치 대신 그 실측값을 기준으로 다음 날 넘길 양이 계산됩니다.</b>
       재고 조사를 하셨으면 노란 칸을 실사값으로 그냥 고쳐 쓰시면 됩니다.</div>
     </div>
     <div class="secttl"><h2>원물 재고와 1층 요청량</h2><span id="sum-date"></span></div>
     <div class="tablewrap"><table id="sumtbl"></table></div>
     <div class="note"><b>기준수율은 원재료 1개당 값 1개입니다.</b> 여기서 고치면 이 원재료를 쓰는 모든 제품에 자동으로 반영됩니다(제품 카드에서는 더 이상 따로 입력하지 않습니다).<br>
-    실제 썰 양 = 작업지시 절단량 − 어제 썰어 놓은 것 · 필요한 원물 = 실제 썰 양 ÷ 기준수율<br>
-    내일로 넘길 원물 = 어제 남은 원물 + 1층에서 올린 양 − 필요한 원물. 이 값이 빨갛게 마이너스로 뜨면 원물을 그만큼 더 올려야 오늘 작업이 끝납니다.</div>
+    실제 썰 양 = 작업지시 절단량 − 어제 썰어 놓은 것 · 필요한 원물 = 실제 썰 양 ÷ 기준수율(실적을 넣으면 그 실측값 우선)<br>
+    내일로 넘길 원물 = 어제 남은 원물 + 1층에서 올린 양 − 필요한 원물(또는 실제 투입 원물). 이 값이 빨갛게 마이너스로 뜨면 원물을 그만큼 더 올려야 오늘 작업이 끝납니다.</div>
   </section>
 
   <!-- ⑤ 기록·집계 -->
@@ -1015,15 +1017,17 @@ function stockRow(m, t){
   const rawOpen  = +S.rawOpen[m]||0;                    // 어제 남은 원물 (2층)
   const preOpen  = +S.preOpen[m]||0;                    // 어제 썰어 놓은 것
   const rawIn    = +S.rawIn[m]||0;                      // 오늘 1층에서 올린 양
-  const cutToday = Math.max(0, cutNeed - preOpen);      // 오늘 실제로 썰어야 할 양
-  const rawUse   = yEff>0 ? cutToday/yEff : 0;          // 필요한 원물
+  const cutToday = Math.max(0, cutNeed - preOpen);      // 오늘 실제로 썰어야 할 양(이론치)
+  const rawUse   = yEff>0 ? cutToday/yEff : 0;          // 필요한 원물(이론치) — 1층 요청량 계산은 이 값을 그대로 씁니다
   const short    = Math.max(0, rawUse - (rawOpen+rawIn));
-  const rawClose = rawOpen + rawIn - rawUse;            // 내일로 넘길 원물
-  const preClose = Math.max(0, preOpen - cutNeed);      // 내일로 넘길 절단품
-  /* 실측 — 작업이 끝난 뒤 넣으시면 기준수율과 대조됩니다 */
+  /* 실측 — 작업이 끝난 뒤 넣으시면 기준수율과 대조되고, 내일로 넘길 양 계산에도 이론치 대신 우선 반영됩니다 */
   const actRaw = +S.actRaw[m]||0, actCut = +S.actCut[m]||0;
   const yAct   = actRaw>0 ? actCut/actRaw : null;       // 실적수율
   const dev    = (yAct!=null && yEff>0) ? (yAct-yEff)*100 : null;   // 기준 대비 %p
+  const rawUsedReal = actRaw>0 ? actRaw : rawUse;       // 실측 있으면 실측, 없으면 이론치
+  const cutReal      = actCut>0 ? actCut : cutToday;
+  const rawClose = rawOpen + rawIn - rawUsedReal;       // 내일로 넘길 원물 — 실적 입력 시 실측 기준
+  const preClose = Math.max(0, preOpen + cutReal - cutNeed);  // 내일로 넘길 절단품 — 실적 입력 시 실측 기준
   return {cutNeed, rawGross, yEff, rawOpen, preOpen, rawIn, cutToday, rawUse, short, rawClose, preClose,
           actRaw, actCut, yAct, dev};
 }
@@ -1120,11 +1124,17 @@ async function closeDay(){
   S.prev = clone({date:S.date, rawOpen:S.rawOpen, preOpen:S.preOpen, rawIn:S.rawIn,
                   actRaw:S.actRaw, actCut:S.actCut,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
-                  lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot}))});
+                  lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot})),
+                  stocks:S.products.map(p=>+p.stock||0)});
   const ro={}, po={};
   matList().forEach(m=>{ const r=stockRow(m,t); ro[m]=Math.max(0,r.rawClose); po[m]=r.preClose; });
+  const restByProduct = {};
+  S.products.forEach(p=>{ restByProduct[p.id] = calc(p).rest; });   // 오늘치 잔여재고를 먼저 뽑아 둡니다(출고 비우기 전)
   S.rawOpen=ro; S.preOpen=po; S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
-  S.products.forEach(p=>{ p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true; });
+  S.products.forEach(p=>{
+    p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true;
+    p.stock = Math.max(0, Math.round((+restByProduct[p.id]||0)*100)/100);  // 전일재고 자동 이월
+  });
   const next=addDay(today,1), existing=await Store.getDay(next);
   S.date=next;
   if(existing && existing.state) applyDayState(existing.state); // 이미 입력한 다음 날짜는 덮어쓰지 않습니다
@@ -1142,6 +1152,7 @@ function undoClose(){
   S.products.forEach((pr,i)=>{
     if(p.buyers[i]) pr.buyers.forEach((b,j)=>{ if(p.buyers[i][j]!=null) b.v=p.buyers[i][j]; });
     if(p.lots && p.lots[i]){ pr.lot = p.lots[i].lot; pr.autoLot = p.lots[i].autoLot; }
+    if(p.stocks && p.stocks[i]!=null) pr.stock = p.stocks[i];
   });
   S.prev=null;
   document.getElementById('workdate').value = S.date;
