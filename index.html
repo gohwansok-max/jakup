@@ -667,7 +667,7 @@ function dayState(){
   return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, stockManual:!!p.stockManual, lot:+p.lot||0, autoLot:!!p.autoLot,
     buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>{ const d={k:+m.k||0,u:+m.u||0,y:+m.y||0}; if(m.load!=null) d.load=+m.load||0; return d; })})),
     rawOpen:clone(S.rawOpen), preOpen:clone(S.preOpen), rawIn:clone(S.rawIn),
-    actRaw:clone(S.actRaw), actCut:clone(S.actCut)};
+    actRaw:clone(S.actRaw), actCut:clone(S.actCut), matYield:clone(S.matYield||{})};
 }
 function applyDayState(state){
   const days=new Map((state.products||[]).map(p=>[p.id,p]));
@@ -682,10 +682,13 @@ function applyDayState(state){
   });
   S.rawOpen={...ZERO(),...(state.rawOpen||{})}; S.preOpen={...ZERO(),...(state.preOpen||{})};
   S.rawIn={...ZERO(),...(state.rawIn||{})}; S.actRaw={...ZERO(),...(state.actRaw||{})}; S.actCut={...ZERO(),...(state.actCut||{})};
+  // 기준수율은 날짜별로 고정됩니다. 옛 형식(수율 저장 전) 기록은 현재 값을 그대로 유지합니다.
+  if(state.matYield && Object.keys(state.matYield).length) S.matYield = clone(state.matYield);
 }
 function blankDay(){
   S.products.forEach(p=>{ p.stock=0; p.stockManual=false; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
   S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
+  // matYield(기준수율)는 초기화하지 않습니다 — 아직 방문한 적 없는 날짜는 가장 최근 값을 그대로 이어받습니다.
 }
 let DAY_SAVE_TIMER=null, IGNORE_SAVE=false;
 function queueDaySave(immediate=false){
@@ -694,13 +697,21 @@ function queueDaySave(immediate=false){
   clearTimeout(DAY_SAVE_TIMER);
   if(immediate) commit(); else DAY_SAVE_TIMER=setTimeout(commit,900);
 }
+/* 실제 입력(900ms 디바운스 저장)이 아직 반영 전인 경우에만 지금 바로 저장을 확정합니다.
+   아무것도 입력하지 않고 날짜만 들여다본 경우엔 저장할 게 없으므로 그냥 넘어갑니다 —
+   그래야 "안 쓴 날짜를 미리 봤다가 빈 기록이 남아서, 나중에 전날 마감의 전일재고 자동
+   이월값을 그 빈 기록이 덮어써버리는" 문제가 생기지 않습니다. */
+function flushDaySave(){
+  if(DAY_SAVE_TIMER!=null){ clearTimeout(DAY_SAVE_TIMER); DAY_SAVE_TIMER=null; return saveToday(true); }
+  return Promise.resolve(true);
+}
 function save(immediate=false){
   if(IGNORE_SAVE) return;
   Store.saveConfig(immediate); queueDaySave(immediate);
 }
 async function switchDay(date){
   if(!date || date===S.date) return;
-  await saveToday(true);                         // 현재 날짜의 입력값을 먼저 확정 저장
+  await flushDaySave();                          // 입력하신 게 있으면 넘어가기 전에 먼저 확정 저장
   const rec=await Store.getDay(date);
   S.date=date;
   if(rec && rec.state) applyDayState(rec.state);
@@ -708,7 +719,11 @@ async function switchDay(date){
   document.getElementById('workdate').value=S.date;
   REC.anchor=new Date(S.date+'T00:00:00');
   IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
-  if(!rec) queueDaySave(true);
+  /* 주의: 아직 아무것도 입력하지 않은 날짜를 "미리 들여다보기만" 해도 여기서 빈 기록을 바로
+     저장해버리면, 나중에 전날 작업을 마감할 때 closeDay()가 "다음 날짜에 이미 기록이 있다"고
+     착각해 전일재고 자동 이월값을 그 빈 기록(0)으로 덮어써버리는 문제가 있었다(실사례: 권화선
+     팀장님이 날짜선택기로 다음날을 미리 봤다가 마감 후 전일재고가 0으로 보임).
+     그래서 실제 입력이 들어오기 전에는 저장하지 않는다 — 입력 리스너의 save()가 그때 처리한다. */
   setText('bkmsg', rec && !rec.state ? '이전 형식의 요약 기록입니다. 상세 입력값은 이번 버전부터 날짜별로 저장됩니다.' :
                     (rec ? S.date+' 입력 DB를 불러왔습니다.' : S.date+'은 새 입력 화면입니다.'));
 }
@@ -1123,7 +1138,7 @@ async function closeDay(){
   await saveToday(true);          // 먼저 오늘 기록을 남깁니다
   const t = matTotals(), today=S.date;
   S.prev = clone({date:S.date, rawOpen:S.rawOpen, preOpen:S.preOpen, rawIn:S.rawIn,
-                  actRaw:S.actRaw, actCut:S.actCut,
+                  actRaw:S.actRaw, actCut:S.actCut, matYield:S.matYield,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
                   lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot})),
                   stocks:S.products.map(p=>+p.stock||0),
@@ -1152,6 +1167,7 @@ function undoClose(){
   const p = S.prev;
   S.date=p.date; S.rawOpen=p.rawOpen; S.preOpen=p.preOpen; S.rawIn=p.rawIn;
   if(p.actRaw) S.actRaw=p.actRaw; if(p.actCut) S.actCut=p.actCut;
+  if(p.matYield) S.matYield=p.matYield;
   S.products.forEach((pr,i)=>{
     if(p.buyers[i]) pr.buyers.forEach((b,j)=>{ if(p.buyers[i][j]!=null) b.v=p.buyers[i][j]; });
     if(p.lots && p.lots[i]){ pr.lot = p.lots[i].lot; pr.autoLot = p.lots[i].autoLot; }
