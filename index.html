@@ -664,7 +664,7 @@ function configSnapshot(){
   return {version:4, date:S.date, products, matYield:clone(S.matYield||{}), updatedAt:new Date().toISOString()};
 }
 function dayState(){
-  return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, lot:+p.lot||0, autoLot:!!p.autoLot,
+  return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, stockManual:!!p.stockManual, lot:+p.lot||0, autoLot:!!p.autoLot,
     buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>{ const d={k:+m.k||0,u:+m.u||0,y:+m.y||0}; if(m.load!=null) d.load=+m.load||0; return d; })})),
     rawOpen:clone(S.rawOpen), preOpen:clone(S.preOpen), rawIn:clone(S.rawIn),
     actRaw:clone(S.actRaw), actCut:clone(S.actCut)};
@@ -673,7 +673,7 @@ function applyDayState(state){
   const days=new Map((state.products||[]).map(p=>[p.id,p]));
   S.products.forEach(p=>{
     const d=days.get(p.id); if(!d) return;
-    p.stock=+d.stock||0; p.lot=+d.lot||0; p.autoLot=d.autoLot!==false;
+    p.stock=+d.stock||0; p.stockManual=!!d.stockManual; p.lot=+d.lot||0; p.autoLot=d.autoLot!==false;
     p.buyers.forEach((b,i)=>{ if(d.buyers && d.buyers[i]!=null) b.v=+d.buyers[i]||0; });
     p.mats.forEach((m,i)=>{ const dm=d.mats&&d.mats[i]; if(!dm) return;
       if(dm.k!=null) m.k=+dm.k||0; if(dm.u!=null) m.u=+dm.u||0; if(dm.y!=null) m.y=+dm.y||0;
@@ -684,7 +684,7 @@ function applyDayState(state){
   S.rawIn={...ZERO(),...(state.rawIn||{})}; S.actRaw={...ZERO(),...(state.actRaw||{})}; S.actCut={...ZERO(),...(state.actCut||{})};
 }
 function blankDay(){
-  S.products.forEach(p=>{ p.stock=0; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
+  S.products.forEach(p=>{ p.stock=0; p.stockManual=false; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
   S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
 }
 let DAY_SAVE_TIMER=null, IGNORE_SAVE=false;
@@ -849,8 +849,9 @@ function buildCards(){
                   <button class="mini" data-wid="${p.id}|stock|+" title="칸 늘리기">▶</button>
                 </div>
               </div>`
-             : `<label for="st-${p.id}">전일재고</label>`}
-            <input class="val" type="number" id="st-${p.id}" value="${p.stock}" data-p="${p.id}" data-k="stock" step="any" inputmode="decimal">
+             : `<label for="st-${p.id}">전일재고${p.stockManual?'<span class="q" style="color:var(--leaf)" title="실사로 직접 입력·수정하신 값입니다. 자동 이월값이 아닙니다.">실사</span>':''}</label>`}
+            <input class="val" type="number" id="st-${p.id}" value="${p.stock}" data-p="${p.id}" data-k="stock" step="any" inputmode="decimal"
+                   style="${p.stockManual?'background:var(--leaf-soft);border-color:var(--leaf)':''}">
           </div>
           ${p.buyers.map((b,i)=>`<div class="field" style="flex-basis:${b.w||DEFW}px">
             ${EDIT ? `<div class="fedit">
@@ -1125,7 +1126,8 @@ async function closeDay(){
                   actRaw:S.actRaw, actCut:S.actCut,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
                   lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot})),
-                  stocks:S.products.map(p=>+p.stock||0)});
+                  stocks:S.products.map(p=>+p.stock||0),
+                  stockManuals:S.products.map(p=>!!p.stockManual)});
   const ro={}, po={};
   matList().forEach(m=>{ const r=stockRow(m,t); ro[m]=Math.max(0,r.rawClose); po[m]=r.preClose; });
   const restByProduct = {};
@@ -1134,6 +1136,7 @@ async function closeDay(){
   S.products.forEach(p=>{
     p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true;
     p.stock = Math.max(0, Math.round((+restByProduct[p.id]||0)*100)/100);  // 전일재고 자동 이월
+    p.stockManual = false;                    // 새로 이월된 값 — 아직 실사로 고치기 전 상태
   });
   const next=addDay(today,1), existing=await Store.getDay(next);
   S.date=next;
@@ -1153,6 +1156,7 @@ function undoClose(){
     if(p.buyers[i]) pr.buyers.forEach((b,j)=>{ if(p.buyers[i][j]!=null) b.v=p.buyers[i][j]; });
     if(p.lots && p.lots[i]){ pr.lot = p.lots[i].lot; pr.autoLot = p.lots[i].autoLot; }
     if(p.stocks && p.stocks[i]!=null) pr.stock = p.stocks[i];
+    pr.stockManual = !!(p.stockManuals && p.stockManuals[i]);
   });
   S.prev=null;
   document.getElementById('workdate').value = S.date;
@@ -1494,7 +1498,16 @@ document.addEventListener('input', e=>{
   if(d.p){                                    // 숫자 입력
     const p = S.products.find(x=>x.id===d.p); if(!p) return;
     const v = num(t.value);
-    if(d.k==='stock')      p.stock = v;
+    if(d.k==='stock'){
+      p.stock = v;
+      if(!p.stockManual){                     // 실사로 직접 고친 첫 순간에만 뱃지·배경 표시(포커스 유지 위해 전체 다시 그리지 않음)
+        p.stockManual = true;
+        t.style.background='var(--leaf-soft)'; t.style.borderColor='var(--leaf)';
+        const lbl = document.querySelector(`label[for="st-${p.id}"]`);
+        if(lbl && !lbl.querySelector('.q'))
+          lbl.insertAdjacentHTML('beforeend', '<span class="q" style="color:var(--leaf)" title="실사로 직접 입력·수정하신 값입니다. 자동 이월값이 아닙니다.">실사</span>');
+      }
+    }
     else if(d.k==='out')   p.buyers[+d.i].v = v;
     else if(d.k==='konti') { p.mats[+d.i].k = v; delete p.mats[+d.i].load; }
     else if(d.k==='unit')  { p.mats[+d.i].u = v; delete p.mats[+d.i].load; }
