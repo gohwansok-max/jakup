@@ -347,7 +347,7 @@ td.short{color:var(--alert); font-weight:700}
     </div>
     <div class="secttl"><h2>원물 재고와 1층 요청량</h2><span id="sum-date"></span></div>
     <div class="tablewrap"><table id="sumtbl"></table></div>
-    <div class="note"><b>기준수율은 원재료 1개당 값 1개입니다.</b> 여기서 고치면 이 원재료를 쓰는 모든 제품에 자동으로 반영됩니다(제품 카드에서는 더 이상 따로 입력하지 않습니다).<br>
+    <div class="note"><b>기준수율은 원재료 1개당 값 1개이며, 날짜마다 빈칸에서 시작합니다</b>(입력하기 전에는 필요한 원물이 0으로 나오고, 쓰는 원재료는 칸이 주황색으로 표시됩니다). 여기서 고치면 이 원재료를 쓰는 모든 제품에 자동으로 반영됩니다(제품 카드에서는 더 이상 따로 입력하지 않습니다).<br>
     실제 썰 양 = 작업지시 절단량 − 어제 썰어 놓은 것 · 필요한 원물 = 실제 썰 양 ÷ 기준수율(실적을 넣으면 그 실측값 우선)<br>
     내일로 넘길 원물 = 어제 남은 원물 + 1층에서 올린 양 − 필요한 원물(또는 실제 투입 원물). 이 값이 빨갛게 마이너스로 뜨면 원물을 그만큼 더 올려야 오늘 작업이 끝납니다.</div>
   </section>
@@ -483,28 +483,10 @@ const DEFAULT_PRODUCTS = [
 ];
 
 const MATS = ['로메인','프릴','카이피라','라디치오','케일','치커리','적근대','적채','양배추','당근','양상추'];
-/* 원재료별 기준수율 — 2026-09-15 통화·작업예시서 근거(설계_생산일지_자동화_Rev1). 2026-10-12 통화로 제품별 입력을 폐지하고
-   이 표(원재료 1개당 값 1개)로 단일화했습니다 — 권화선 팀장님: "로메인이면 로메인 수율을 딱 넣으면 자동으로 들어가게". */
-const DEFAULT_YIELD = {로메인:.60, 프릴:.63, 카이피라:.64, 라디치오:.68, 케일:.77, 치커리:.60, 적근대:.66, 적채:.90, 양배추:.75, 당근:.75, 양상추:.50};
-const matYield = name => { const v = S.matYield && S.matYield[name]; return (v>0) ? v : (DEFAULT_YIELD[name] || 0.6); };
-/* 기존 제품별 수율값이 흩어져 있던 1회성 자료를 원재료 1개당 값 1개로 정리합니다(최빈값 채택, 없으면 기준표). */
-function migrateMatYield(){
-  if(S.matYield && Object.keys(S.matYield).length) return;
-  const counts = {};
-  S.products.forEach(p=>p.mats.forEach(m=>{
-    if(!m.n || !(+m.y>0)) return;
-    const v = (+m.y).toFixed(4);
-    (counts[m.n]=counts[m.n]||{})[v] = (counts[m.n][v]||0)+1;
-  }));
-  const result = {};
-  Object.keys(counts).forEach(name=>{
-    let best=null, bestN=-1;
-    Object.entries(counts[name]).forEach(([v,n])=>{ if(n>bestN){ bestN=n; best=v; } });
-    result[name] = best!=null ? +best : (DEFAULT_YIELD[name]||0.6);
-  });
-  matList().forEach(name=>{ if(result[name]==null) result[name] = DEFAULT_YIELD[name]||0.6; });
-  S.matYield = result;
-}
+/* 원재료별 기준수율 — 원재료 1개당 값 1개(2026-10-12 통화로 제품별 입력 폐지).
+   2026-10-13 권화선 팀장님 요청: "기준수율은 계속 수정해야 해서, 복원 없이 빈칸으로" —
+   새 날짜는 빈칸에서 시작하고 기본값을 채워 넣지 않습니다. 입력 전에는 원물 필요량을 계산하지 않습니다(0). */
+const matYield = name => { const v = S.matYield && S.matYield[name]; return v>0 ? v : 0; };
 /* 어제 남은 원물 (2층, 썰기 전) — 합계 시트 10행 */
 const RAW0 = {로메인:433,프릴:144,카이피라:88,라디치오:420,케일:0,치커리:24,적근대:30,적채:50,양배추:12,당근:0,양상추:0};
 /* 어제 썰어 놓은 것 (전처리 완료품) — 합계 시트 13행 */
@@ -688,7 +670,7 @@ function applyDayState(state){
 function blankDay(){
   S.products.forEach(p=>{ p.stock=0; p.stockManual=false; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
   S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
-  // matYield(기준수율)는 초기화하지 않습니다 — 아직 방문한 적 없는 날짜는 가장 최근 값을 그대로 이어받습니다.
+  S.matYield = {};   // 기준수율도 빈칸에서 시작합니다(그 날짜에 저장된 값이 있으면 아래에서 복원).
 }
 let DAY_SAVE_TIMER=null, IGNORE_SAVE=false;
 function queueDaySave(immediate=false){
@@ -733,39 +715,54 @@ function computeCarryForward(){
   S.products.forEach(p=>{ stockById[p.id] = Math.max(0, Math.round((calc(p).rest||0)*100)/100); });
   return {rawOpen, preOpen, stockById};
 }
+/* 목표 날짜 "직전의 진짜 입력이 있는 기록"을 찾아, 그 날 기준으로 이월값을 계산합니다.
+   날짜선택기로 하루 이상 건너뛰거나(금→월), 키보드로 일자를 치다 중간 날짜를 거쳐도
+   빈 화면이 아니라 마지막으로 실제 작업한 날을 기준으로 이어집니다. 화면 상태는 그대로 복원합니다. */
+const CARRY_LOOKBACK = 14;
+async function carryForDate(date){
+  for(let i=1;i<=CARRY_LOOKBACK;i++){
+    const d = addDay(date,-i);
+    if(d===S.date){
+      if(stateHasRealInput(dayState())) return computeCarryForward();
+      continue;
+    }
+    const r = await Store.getDay(d);
+    if(!(r && r.state && stateHasRealInput(r.state))) continue;
+    const snap = dayState(), my = S.matYield;
+    applyDayState(r.state);
+    const cf = computeCarryForward();
+    applyDayState(snap); S.matYield = my;
+    return cf;
+  }
+  return null;
+}
 async function switchDay(date){
   if(!date || date===S.date) return;
-  const forwardOne = date===addDay(S.date,1);
-  const cf = forwardOne ? computeCarryForward() : null;   // 날짜를 바꾸기 전, "오늘" 기준으로 미리 계산해 둡니다
   await flushDaySave();                          // 입력하신 게 있으면 넘어가기 전에 먼저 확정 저장
-  const rec=await Store.getDay(date);
+  const cf = await carryForDate(date);           // 날짜를 바꾸기 전에, 직전 작업일 기준으로 미리 계산해 둡니다
+  const rec = await Store.getDay(date);
   S.date=date;
   const real = rec && rec.state && stateHasRealInput(rec.state);
   if(real){
     applyDayState(rec.state);                    // 실제로 입력해 둔 값이 있으면 그걸 보호합니다
+    // 단, 전일재고 중 "실사로 직접 고치지 않은" 값은 예전 이월 누락(0)이 남아 있을 수 있어 다시 이어줍니다.
+    if(cf) S.products.forEach(p=>{ if(!p.stockManual && cf.stockById[p.id]!=null) p.stock=cf.stockById[p.id]; });
   } else if(cf){
-    // 바로 다음 날로 넘어가는데 아직 아무 입력도 없으면 — 작업 마감을 누른 것과 똑같이
-    // 전일재고를 이어줍니다. "작업 마감" 버튼을 안 누르고 날짜만 바꿔도 이월되게 하기 위함
-    // (실사례: 날짜선택기로만 다음 날로 넘어가시면서 "이월이 안 된다"는 반복 보고).
+    // 아직 아무 입력도 없으면 — 작업 마감을 누른 것과 똑같이 전일재고를 이어줍니다.
     blankDay();
     S.rawOpen={...ZERO(), ...cf.rawOpen}; S.preOpen={...ZERO(), ...cf.preOpen};
     S.products.forEach(p=>{ if(cf.stockById[p.id]!=null) p.stock=cf.stockById[p.id]; });
   } else {
     blankDay();
   }
-  // 기준수율(matYield)은 "진짜 입력이 있었나"와 무관하게, 그 날짜에 저장된 값이 있으면
-  // 항상 그대로 복원합니다(Phase 5 — 날짜별로 고정되어야 하는 값이라 위의 전일재고 보호
-  // 로직과는 별개로 다룹니다. applyDayState()가 이미 처리한 real 쪽은 건드리지 않습니다).
+  // 기준수율(matYield)은 그 날짜에 저장된 값이 있을 때만 복원하고, 없으면 빈칸입니다.
   if(!real && rec && rec.state && rec.state.matYield && Object.keys(rec.state.matYield).length)
     S.matYield = clone(rec.state.matYield);
   document.getElementById('workdate').value=S.date;
   REC.anchor=new Date(S.date+'T00:00:00');
   IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
-  /* 주의: 아직 아무것도 입력하지 않은 날짜를 "미리 들여다보기만" 해도 여기서 빈 기록을 바로
-     저장해버리면, 나중에 전날 작업을 마감할 때 closeDay()가 "다음 날짜에 이미 기록이 있다"고
-     착각해 전일재고 자동 이월값을 그 빈 기록(0)으로 덮어써버리는 문제가 있었다(실사례: 권화선
-     팀장님이 날짜선택기로 다음날을 미리 봤다가 마감 후 전일재고가 0으로 보임).
-     그래서 실제 입력이 들어오기 전에는 저장하지 않는다 — 입력 리스너의 save()가 그때 처리한다. */
+  /* 주의: 아직 아무것도 입력하지 않은 날짜를 "미리 들여다보기만" 해도 빈 기록을 바로 저장하지 않습니다 —
+     입력 리스너의 save()가 실제 입력이 들어올 때 처리합니다. */
   setText('bkmsg', rec && !rec.state ? '이전 형식의 요약 기록입니다. 상세 입력값은 이번 버전부터 날짜별로 저장됩니다.' :
                     (rec ? S.date+' 입력 DB를 불러왔습니다.' : S.date+'은 새 입력 화면입니다.'));
 }
@@ -793,7 +790,7 @@ function calc(p){
     const kt  = lot*(+m.k||0);            // 콘티총수량
     const cut = kt*(+m.u||0);             // 절단량 kg
     return {n:m.n, unit:+m.u||0, konti:+m.k||0, kt, cut,
-            raw: cut/matYield(m.n), ratio: loadSum? loads[i]/loadSum : 0};
+            raw: matYield(m.n)>0 ? cut/matYield(m.n) : 0, ratio: loadSum? loads[i]/loadSum : 0};
   });
   return {perLot, out, need, recLot, lot, cap, rest, rows, loadSum};
 }
@@ -960,7 +957,7 @@ function buildCards(){
                      <label class="mf"><span>콘티수량</span><input type="number" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal"${m.deleted?' disabled':''}></label>
                      <label class="mf"><span>콘티 kg</span><input type="number" value="${m.u}" data-p="${p.id}" data-k="unit" data-i="${i}" step="any" inputmode="decimal"${m.deleted?' disabled':''}></label>
                    </div>
-                   ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">기준수율 <b>${(matYield(m.n)*100).toFixed(0)}%</b>(③탭에서 조정) · 배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
+                   ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">기준수율 ${matYield(m.n)>0 ? '<b>'+(matYield(m.n)*100).toFixed(0)+'%</b>' : '<b style="color:var(--amber)">미입력</b>'}(③탭에서 입력) · 배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
                  </div>`
               : `<div class="field" style="flex-basis:${DEFW}px">
                    <label for="kt-${p.id}-${ri}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${ri}"></span></label>
@@ -1095,7 +1092,7 @@ const stockCell = (id,val,label,key,ph)=>
      style="font:inherit;font-size:13px;text-align:right;width:82px;padding:3px 7px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:6px;color:var(--ink);font-variant-numeric:tabular-nums"></td>`;
 
 const yieldCell = m =>
-  `<td><input type="number" id="my-${esc(m)}" value="${(matYield(m)*100).toFixed(0)}" data-matyield="${esc(m)}" step="1" min="1" max="100" inputmode="decimal"
+  `<td><input type="number" id="my-${esc(m)}" value="${matYield(m)>0 ? (matYield(m)*100).toFixed(0) : ''}" placeholder="입력" data-matyield="${esc(m)}" step="1" min="1" max="100" inputmode="decimal"
      aria-label="${esc(m)} 기준수율(%)"
      style="font:inherit;font-size:13px;text-align:right;width:52px;padding:3px 7px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:6px;color:var(--ink);font-variant-numeric:tabular-nums">%</td>`;
 
@@ -1158,6 +1155,7 @@ function refreshSum(){
     set('s-rc-'+m,   f1(r.rawClose), 'num'+(r.rawClose<-0.05?' short':(r.rawClose?'':' zero')));
     set('s-pc-'+m,   f1(r.preClose), 'num'+(r.preClose?'':' zero'));
     set('s-ya-'+m,   r.yAct!=null?(r.yAct*100).toFixed(1)+'%':'—', 'num'+(r.yAct!=null?'':' zero'));
+    const yi=document.getElementById('my-'+m); if(yi) yi.style.borderColor = (!(matYield(m)>0) && r.cutNeed>0) ? 'var(--amber)' : '';
     set('s-dv-'+m,   r.dev!=null?(r.dev>0?'+':'')+r.dev.toFixed(1)+'%p':'—',
         'num'+(r.dev==null?' zero':(r.dev<-5?' short':'')));
     T.ro+=r.rawOpen; T.po+=r.preOpen; T.need+=r.cutNeed; T.cut+=r.cutToday;
@@ -1187,6 +1185,7 @@ async function closeDay(){
                   stockManuals:S.products.map(p=>!!p.stockManual)});
   const cf = computeCarryForward();   // 오늘치 잔여재고·원물을 먼저 뽑아 둡니다(출고 비우기 전)
   S.rawOpen=cf.rawOpen; S.preOpen=cf.preOpen; S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
+  S.matYield = {};                    // 기준수율은 이어받지 않고 빈칸 — 팀장님이 매일 직접 입력
   S.products.forEach(p=>{
     p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true;
     p.stock = cf.stockById[p.id]!=null ? cf.stockById[p.id] : 0;  // 전일재고 자동 이월
@@ -1608,12 +1607,13 @@ document.addEventListener('input', e=>{
     refreshSum(); save(); return;
   }
   if(d.matyield){                             // 원재료 기준수율(%) — 원재료 1개당 값 1개, 모든 제품에 즉시 반영
-    const pct = Math.max(1, Math.min(100, num(t.value)));
     S.matYield = S.matYield || {};
-    S.matYield[d.matyield] = pct/100;
+    const blank = String(t.value).trim()==='';
+    const pct = blank ? 0 : Math.max(1, Math.min(100, num(t.value)));
+    if(blank) delete S.matYield[d.matyield]; else S.matYield[d.matyield] = pct/100;   // 지우면 다시 빈칸(기본값 복원 없음)
     // 같은 원재료를 쓰는 다른 제품 카드에도 기준수율 입력칸이 있을 수 있으므로(출고량 입력 탭) 값을 맞춰줍니다.
     document.querySelectorAll('[data-matyield]').forEach(inp=>{
-      if(inp!==t && inp.dataset.matyield===d.matyield) inp.value = Math.round(pct);
+      if(inp!==t && inp.dataset.matyield===d.matyield) inp.value = blank ? '' : Math.round(pct);
     });
     refreshCards(); floor(); refreshSum(); logview(); save();
     return;
@@ -1756,7 +1756,6 @@ document.addEventListener('change', e=>{
     S.actRaw  = cfg.actRaw  || ZERO();
     S.actCut  = cfg.actCut  || ZERO();
     S.matYield= cfg.matYield|| {};
-    migrateMatYield();                       // 처음 한 번만: 제품별로 흩어진 수율을 원재료별 1개 값으로 정리
     legacy=!cfg.version;
     if(!legacy){
       const active=await Store.getDay(S.date);
@@ -1764,7 +1763,7 @@ document.addEventListener('change', e=>{
     }
     document.getElementById('workdate').value = S.date;
     IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
-  } else { migrateMatYield(); rebuild(); }
+  } else { rebuild(); }
   REC.anchor = new Date(S.date+'T00:00:00');
   BOOTING = false;                          // 이제부터 변경분을 저장합니다
   if(legacy) await saveToday(true);          // 기존 화면의 마지막 입력값을 날짜 DB로 1회 이전
