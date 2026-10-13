@@ -709,13 +709,55 @@ function save(immediate=false){
   if(IGNORE_SAVE) return;
   Store.saveConfig(immediate); queueDaySave(immediate);
 }
+/* 어떤 날짜 기록이 "팀장님이 실제로 입력해 둔" 것인지, 그냥 비어 있는(또는 자동으로
+   저장만 됐던) 기록인지 구분합니다. 전일재고 자동 이월값(rawOpen/preOpen/stock)은
+   여기서 일부러 보지 않습니다 — 그건 이월이 채워 넣는 값 자체라서, 그것만 있다고
+   "진짜 입력이 있다"고 보면 다음 이월을 영영 못 하게 됩니다. */
+function stateHasRealInput(state){
+  if(!state) return false;
+  const nz = v => Math.abs(+v||0) > 1e-9;
+  const mapNZ = obj => !!obj && Object.values(obj).some(nz);
+  if(state.products && state.products.some(p =>
+       (p.buyers && p.buyers.some(nz)) || nz(p.lot) || p.autoLot===false || p.stockManual)) return true;
+  if(mapNZ(state.rawIn) || mapNZ(state.actRaw) || mapNZ(state.actCut)) return true;
+  return false;
+}
+/* 지금 보고 있는(떠나려는) 날짜를 기준으로, 다음 날로 넘길 원물·제품재고를 미리 계산합니다.
+   closeDay()와 switchDay()(다음 날로 넘어갈 때)가 공통으로 씁니다 — 날짜를 바꾸기 전에,
+   상태를 건드리기 전에 호출해야 합니다. */
+function computeCarryForward(){
+  const t = matTotals();
+  const rawOpen={}, preOpen={};
+  matList().forEach(m=>{ const r=stockRow(m,t); rawOpen[m]=Math.max(0,r.rawClose); preOpen[m]=r.preClose; });
+  const stockById = {};
+  S.products.forEach(p=>{ stockById[p.id] = Math.max(0, Math.round((calc(p).rest||0)*100)/100); });
+  return {rawOpen, preOpen, stockById};
+}
 async function switchDay(date){
   if(!date || date===S.date) return;
+  const forwardOne = date===addDay(S.date,1);
+  const cf = forwardOne ? computeCarryForward() : null;   // 날짜를 바꾸기 전, "오늘" 기준으로 미리 계산해 둡니다
   await flushDaySave();                          // 입력하신 게 있으면 넘어가기 전에 먼저 확정 저장
   const rec=await Store.getDay(date);
   S.date=date;
-  if(rec && rec.state) applyDayState(rec.state);
-  else blankDay();
+  const real = rec && rec.state && stateHasRealInput(rec.state);
+  if(real){
+    applyDayState(rec.state);                    // 실제로 입력해 둔 값이 있으면 그걸 보호합니다
+  } else if(cf){
+    // 바로 다음 날로 넘어가는데 아직 아무 입력도 없으면 — 작업 마감을 누른 것과 똑같이
+    // 전일재고를 이어줍니다. "작업 마감" 버튼을 안 누르고 날짜만 바꿔도 이월되게 하기 위함
+    // (실사례: 날짜선택기로만 다음 날로 넘어가시면서 "이월이 안 된다"는 반복 보고).
+    blankDay();
+    S.rawOpen={...ZERO(), ...cf.rawOpen}; S.preOpen={...ZERO(), ...cf.preOpen};
+    S.products.forEach(p=>{ if(cf.stockById[p.id]!=null) p.stock=cf.stockById[p.id]; });
+  } else {
+    blankDay();
+  }
+  // 기준수율(matYield)은 "진짜 입력이 있었나"와 무관하게, 그 날짜에 저장된 값이 있으면
+  // 항상 그대로 복원합니다(Phase 5 — 날짜별로 고정되어야 하는 값이라 위의 전일재고 보호
+  // 로직과는 별개로 다룹니다. applyDayState()가 이미 처리한 real 쪽은 건드리지 않습니다).
+  if(!real && rec && rec.state && rec.state.matYield && Object.keys(rec.state.matYield).length)
+    S.matYield = clone(rec.state.matYield);
   document.getElementById('workdate').value=S.date;
   REC.anchor=new Date(S.date+'T00:00:00');
   IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
@@ -1136,26 +1178,29 @@ function refreshSum(){
 /* 작업 마감 → 그날 기록 저장 후 내일로 이월 */
 async function closeDay(){
   await saveToday(true);          // 먼저 오늘 기록을 남깁니다
-  const t = matTotals(), today=S.date;
+  const today=S.date;
   S.prev = clone({date:S.date, rawOpen:S.rawOpen, preOpen:S.preOpen, rawIn:S.rawIn,
                   actRaw:S.actRaw, actCut:S.actCut, matYield:S.matYield,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
                   lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot})),
                   stocks:S.products.map(p=>+p.stock||0),
                   stockManuals:S.products.map(p=>!!p.stockManual)});
-  const ro={}, po={};
-  matList().forEach(m=>{ const r=stockRow(m,t); ro[m]=Math.max(0,r.rawClose); po[m]=r.preClose; });
-  const restByProduct = {};
-  S.products.forEach(p=>{ restByProduct[p.id] = calc(p).rest; });   // 오늘치 잔여재고를 먼저 뽑아 둡니다(출고 비우기 전)
-  S.rawOpen=ro; S.preOpen=po; S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
+  const cf = computeCarryForward();   // 오늘치 잔여재고·원물을 먼저 뽑아 둡니다(출고 비우기 전)
+  S.rawOpen=cf.rawOpen; S.preOpen=cf.preOpen; S.rawIn=ZERO(); S.actRaw=ZERO(); S.actCut=ZERO();
   S.products.forEach(p=>{
     p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true;
-    p.stock = Math.max(0, Math.round((+restByProduct[p.id]||0)*100)/100);  // 전일재고 자동 이월
+    p.stock = cf.stockById[p.id]!=null ? cf.stockById[p.id] : 0;  // 전일재고 자동 이월
     p.stockManual = false;                    // 새로 이월된 값 — 아직 실사로 고치기 전 상태
   });
   const next=addDay(today,1), existing=await Store.getDay(next);
   S.date=next;
-  if(existing && existing.state) applyDayState(existing.state); // 이미 입력한 다음 날짜는 덮어쓰지 않습니다
+  // 다음 날짜에 "진짜 입력"이 이미 있을 때만 보호합니다 — 그냥 들여다보기만 해서 생긴
+  // 빈 기록이라면(stateHasRealInput===false) 지금 계산한 이월값을 그대로 씁니다.
+  const nextReal = existing && existing.state && stateHasRealInput(existing.state);
+  if(nextReal) applyDayState(existing.state);
+  // 기준수율은 "진짜 입력" 여부와 무관하게, 다음 날짜에 저장된 값이 있으면 그대로 따릅니다.
+  if(!nextReal && existing && existing.state && existing.state.matYield && Object.keys(existing.state.matYield).length)
+    S.matYield = clone(existing.state.matYield);
   document.getElementById('workdate').value=S.date;
   REC.anchor=new Date(S.date+'T00:00:00');
   rebuild();
