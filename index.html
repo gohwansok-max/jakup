@@ -510,7 +510,7 @@ const FB_ROOT = "dkj";      // 여러 사업장을 한 프로젝트에서 쓰실
 const clone = o => JSON.parse(JSON.stringify(o));
 const fresh = ()=>({ date:'2026-09-01', products:clone(DEFAULT_PRODUCTS),
                      rawOpen:{...RAW0}, preOpen:{...PRE0}, rawIn:ZERO(),
-                     endRaw:{}, endPre:{}, prev:null });   // endRaw/endPre = 당일재고(원물/전처리) 실사 입력 — 키가 없으면 미입력
+                     endRaw:{}, endPre:{}, rawOpenManual:{}, preOpenManual:{}, prev:null });   // endRaw/endPre = 당일재고(원물/전처리) 실사 입력 — 키가 없으면 미입력
 
 let S = fresh();
 let BOOTING = true;      // 저장소에서 설정을 읽어 올 때까지 쓰기를 막습니다
@@ -644,7 +644,8 @@ function dayState(){
   return {products:S.products.map(p=>({id:p.id, stock:+p.stock||0, stockManual:!!p.stockManual, lot:+p.lot||0, autoLot:!!p.autoLot,
     buyers:p.buyers.map(b=>+b.v||0), mats:p.mats.map(m=>{ const d={k:+m.k||0,u:+m.u||0,y:+m.y||0}; if(m.load!=null) d.load=+m.load||0; return d; })})),
     rawOpen:clone(S.rawOpen), preOpen:clone(S.preOpen), rawIn:clone(S.rawIn),
-    endRaw:clone(S.endRaw||{}), endPre:clone(S.endPre||{})};
+    endRaw:clone(S.endRaw||{}), endPre:clone(S.endPre||{}),
+    rawOpenManual:clone(S.rawOpenManual||{}), preOpenManual:clone(S.preOpenManual||{})};
 }
 function applyDayState(state){
   const days=new Map((state.products||[]).map(p=>[p.id,p]));
@@ -660,10 +661,11 @@ function applyDayState(state){
   S.rawOpen={...ZERO(),...(state.rawOpen||{})}; S.preOpen={...ZERO(),...(state.preOpen||{})};
   S.rawIn={...ZERO(),...(state.rawIn||{})};
   S.endRaw={...(state.endRaw||{})}; S.endPre={...(state.endPre||{})};
+  S.rawOpenManual={...(state.rawOpenManual||{})}; S.preOpenManual={...(state.preOpenManual||{})};   // 직접 고친 전일 재고 칸 표시
 }
 function blankDay(){
   S.products.forEach(p=>{ p.stock=0; p.stockManual=false; p.lot=0; p.autoLot=true; p.buyers.forEach(b=>b.v=0); });
-  S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.endRaw={}; S.endPre={};
+  S.rawOpen=ZERO(); S.preOpen=ZERO(); S.rawIn=ZERO(); S.endRaw={}; S.endPre={}; S.rawOpenManual={}; S.preOpenManual={};
 }
 let DAY_SAVE_TIMER=null, IGNORE_SAVE=false;
 function queueDaySave(immediate=false){
@@ -735,6 +737,15 @@ async function carryForDate(date){
   }
   return null;
 }
+/* 직전 작업일의 당일재고로 오늘의 전일 재고(원물·전처리·제품 잔여재고)를 다시 이어줍니다.
+   팀장님이 직접 숫자를 고치신 칸(…Manual)만 그대로 두고, 나머지는 이월값으로 갱신합니다.
+   — 2일자에 이미 입고 등을 입력해 둔 뒤 1일자 당일재고를 넣어도(또는 예전 이월값이 남아 있어도) 따라오게 하기 위함 */
+function applyCarryToCurrent(cf){
+  if(!cf) return;
+  S.products.forEach(p=>{ if(!p.stockManual && cf.stockById[p.id]!=null) p.stock=cf.stockById[p.id]; });
+  Object.keys(cf.rawOpen).forEach(m=>{ if(!S.rawOpenManual[m]) S.rawOpen[m]=cf.rawOpen[m]; });
+  Object.keys(cf.preOpen).forEach(m=>{ if(!S.preOpenManual[m]) S.preOpen[m]=cf.preOpen[m]; });
+}
 async function switchDay(date){
   if(!date || date===S.date) return;
   await flushDaySave();                          // 입력하신 게 있으면 넘어가기 전에 먼저 확정 저장
@@ -744,13 +755,7 @@ async function switchDay(date){
   const real = rec && rec.state && stateHasRealInput(rec.state);
   if(real){
     applyDayState(rec.state);                    // 실제로 입력해 둔 값이 있으면 그걸 보호합니다
-    // 단, 전일재고 중 "실사로 직접 고치지 않은" 값은 예전 이월 누락(0)이 남아 있을 수 있어 다시 이어줍니다.
-    if(cf){
-      S.products.forEach(p=>{ if(!p.stockManual && cf.stockById[p.id]!=null) p.stock=cf.stockById[p.id]; });
-      // 전일 당일재고를 나중에 입력하신 경우: 비어 있는(0) 전일 재고 칸은 이어줍니다. 직접 숫자를 넣어 둔 칸은 건드리지 않습니다.
-      Object.keys(cf.rawOpen).forEach(m=>{ if(!(+S.rawOpen[m]>0) && cf.rawOpen[m]>0) S.rawOpen[m]=cf.rawOpen[m]; });
-      Object.keys(cf.preOpen).forEach(m=>{ if(!(+S.preOpen[m]>0) && cf.preOpen[m]>0) S.preOpen[m]=cf.preOpen[m]; });
-    }
+    applyCarryToCurrent(cf);                     // 단, 직접 고치지 않은 전일 재고는 직전 작업일 당일재고로 다시 이어줍니다
   } else if(cf){
     // 아직 아무 입력도 없으면 — 작업 마감을 누른 것과 똑같이 전일재고를 이어줍니다.
     blankDay();
@@ -1188,13 +1193,13 @@ async function closeDay(){
   await saveToday(true);          // 먼저 오늘 기록을 남깁니다
   const today=S.date;
   S.prev = clone({date:S.date, rawOpen:S.rawOpen, preOpen:S.preOpen, rawIn:S.rawIn,
-                  endRaw:S.endRaw, endPre:S.endPre,
+                  endRaw:S.endRaw, endPre:S.endPre, rawOpenManual:S.rawOpenManual, preOpenManual:S.preOpenManual,
                   buyers:S.products.map(p=>p.buyers.map(b=>b.v)),
                   lots:S.products.map(p=>({lot:p.lot, autoLot:!!p.autoLot})),
                   stocks:S.products.map(p=>+p.stock||0),
                   stockManuals:S.products.map(p=>!!p.stockManual)});
   const cf = computeCarryForward();   // 오늘치 잔여재고·원물을 먼저 뽑아 둡니다(출고 비우기 전)
-  S.rawOpen={...ZERO(), ...cf.rawOpen}; S.preOpen={...ZERO(), ...cf.preOpen}; S.rawIn=ZERO(); S.endRaw={}; S.endPre={};
+  S.rawOpen={...ZERO(), ...cf.rawOpen}; S.preOpen={...ZERO(), ...cf.preOpen}; S.rawIn=ZERO(); S.endRaw={}; S.endPre={}; S.rawOpenManual={}; S.preOpenManual={};
   S.products.forEach(p=>{
     p.buyers.forEach(b=>b.v=0); p.lot=0; p.autoLot=true;
     p.stock = cf.stockById[p.id]!=null ? cf.stockById[p.id] : 0;  // 전일재고 자동 이월
@@ -1205,7 +1210,7 @@ async function closeDay(){
   // 다음 날짜에 "진짜 입력"이 이미 있을 때만 보호합니다 — 그냥 들여다보기만 해서 생긴
   // 빈 기록이라면(stateHasRealInput===false) 지금 계산한 이월값을 그대로 씁니다.
   const nextReal = existing && existing.state && stateHasRealInput(existing.state);
-  if(nextReal) applyDayState(existing.state);
+  if(nextReal){ applyDayState(existing.state); applyCarryToCurrent(cf); }
   document.getElementById('workdate').value=S.date;
   REC.anchor=new Date(S.date+'T00:00:00');
   rebuild();
@@ -1217,7 +1222,7 @@ function undoClose(){
   if(!S.prev) return;
   const p = S.prev;
   S.date=p.date; S.rawOpen=p.rawOpen; S.preOpen=p.preOpen; S.rawIn=p.rawIn;
-  S.endRaw=p.endRaw||{}; S.endPre=p.endPre||{};
+  S.endRaw=p.endRaw||{}; S.endPre=p.endPre||{}; S.rawOpenManual=p.rawOpenManual||{}; S.preOpenManual=p.preOpenManual||{};
   S.products.forEach((pr,i)=>{
     if(p.buyers[i]) pr.buyers.forEach((b,j)=>{ if(p.buyers[i][j]!=null) b.v=p.buyers[i][j]; });
     if(p.lots && p.lots[i]){ pr.lot = p.lots[i].lot; pr.autoLot = p.lots[i].autoLot; }
@@ -1592,8 +1597,9 @@ document.addEventListener('input', e=>{
   }
   if(d.rawopen || d.preopen || d.rawin){
     const v = num(t.value);
-    if(d.rawopen) S.rawOpen[d.rawopen] = v;
-    if(d.preopen) S.preOpen[d.preopen] = v;
+    const blank = String(t.value).trim()==='';       // 직접 고친 칸은 이월이 덮어쓰지 않습니다(비우면 다시 자동 이월)
+    if(d.rawopen){ S.rawOpen[d.rawopen] = v; if(blank) delete S.rawOpenManual[d.rawopen]; else S.rawOpenManual[d.rawopen]=true; }
+    if(d.preopen){ S.preOpen[d.preopen] = v; if(blank) delete S.preOpenManual[d.preopen]; else S.preOpenManual[d.preopen]=true; }
     if(d.rawin)   S.rawIn[d.rawin]     = v;
     refreshSum(); logview(); save(); return;
   }
@@ -1737,6 +1743,7 @@ document.addEventListener('change', e=>{
     if(!legacy){
       const active=await Store.getDay(S.date);
       if(active && active.state) applyDayState(active.state); else blankDay();
+      applyCarryToCurrent(await carryForDate(S.date));   // 열 때도 직전 작업일 당일재고를 다시 이어줍니다
     }
     document.getElementById('workdate').value = S.date;
     IGNORE_SAVE=true; rebuild(); IGNORE_SAVE=false;
