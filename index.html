@@ -299,7 +299,7 @@ td.short{color:var(--alert); font-weight:700}
       <div><b>노란 칸만 채우십시오.</b> 거래처별 출고량(EA)만 넣으면 필요 LOT·콘티수량·원물 소요량·현장 지시서가 전부 자동으로 나옵니다.
       <b>전일재고는 ③ 원물 사용현황 화면에 당일재고를 입력하고 작업 마감(또는 날짜 변경)을 하시면 다음 날로 자동으로 넘어가 채워집니다</b>(직접 입력하실 필요 없습니다 — 실사값으로 고치고 싶으시면 그냥 덮어쓰시면 됩니다).
       오늘 안 나가는 제품은 칸 끝의 <b>비우기</b>를 누르시면 그 제품 출고 수량이 한 번에 0이 됩니다(잘못 누르셨으면 바로 <b>되돌리기</b>).
-      물량이 모자라면 LOT를 직접 올리거나, 아래 <b>1회 배합 콘티수량</b>을 펴서 배합을 조정하십시오.
+      물량이 모자라면 LOT를 직접 올리거나, 아래 <b>1회 배합 콘티수량</b>에서 배합을 조정하십시오.
       <br>지금 화면에는 <b>2026-09-01 작업예시서의 실제 값</b>이 예시로 들어가 있습니다. 입력하신 내용은 이 브라우저에 자동 저장됩니다.</div>
     </div>
 
@@ -309,7 +309,7 @@ td.short{color:var(--alert); font-weight:700}
       <br>제품 이름 아래 칸은 <b>제품명 옆에 붙는 설명</b>입니다. 안 맞으면 고쳐 쓰시고, 필요 없으시면 <b>비우시면 아예 안 보입니다</b>.
       제품이 새로 생겼으면 맨 아래 <b>＋ 새 제품 만들기</b>를, 배합이 비슷한 제품이 이미 있으면 그 제품의 <b>복제</b>를 누르십시오 — 배합·콘티단위·거래처 칸이 그대로 따라오고 숫자만 비워집니다.
       제품 순서는 현장 작업지시·생산일지·집계에도 그대로 따라갑니다.
-      <br>배합을 바꾸려면 <b>1회 배합 콘티수량</b>을 펴서 원재료명·콘티단위(kg)·기준수율까지 고치시면 됩니다. 고친 내용은 바로 저장됩니다.</div>
+      <br>배합을 바꾸려면 <b>1회 배합 콘티수량</b>에서 원재료명·콘티단위(kg)·기준수율까지 바로 고치시면 됩니다. 고친 내용은 바로 저장됩니다.</div>
     </div>
 
     <div class="grid" id="cards"></div>
@@ -946,15 +946,13 @@ function buildCards(){
           <div id="r-rest-w-${p.id}"><dt>잔여재고</dt><dd class="num" id="r-rest-${p.id}"></dd></div>
         </dl>
 
-        <details class="konti">
-          <summary>1회 배합 콘티수량${EDIT?' · 원재료 편집':' · 배합비'}</summary>
+        <details class="konti" open>
+          <summary onclick="return false">1회 배합 콘티수량 · 배합비 편집</summary>
           <div class="inrow">
             ${(()=>{ let vi=-1; return p.mats.map((m,i)=>{
               if(!m.deleted) vi++;
               const ri = vi;   // 배합비(ratio)/콘티수량 DOM id는 활성(비삭제) 원재료 순번 기준 — calc().rows와 일치시킴
-              if(m.deleted && !EDIT) return '';
-              return EDIT
-              ? `<div class="matbox">
+              return `<div class="matbox">
                    <div class="fedit" style="flex-direction:row;align-items:center;gap:3px">
                      <input class="fname" value="${esc(m.n)}" data-mn="${p.id}|${i}" aria-label="원재료명"${m.deleted?' style="opacity:0.5"':''}>
                      <button class="mini ${m.deleted?'':'x'} keep" data-${m.deleted?'recov':'delm'}="m-${p.id}-${i}" title="${m.deleted?'이 원재료 복원':'이 원재료 삭제'}" style="${m.deleted?'border-color:var(--leaf);color:var(--leaf)':''}">${m.deleted?'↩':'✕'}</button>
@@ -964,17 +962,12 @@ function buildCards(){
                      <label class="mf"><span>콘티 kg</span><input type="number" value="${m.u}" data-p="${p.id}" data-k="unit" data-i="${i}" step="any" inputmode="decimal"${m.deleted?' disabled':''}></label>
                    </div>
                    ${m.deleted?'':`<span style="font-size:10px;color:var(--ink-3)">배합비 <b id="ratio-${p.id}-${ri}"></b></span>`}
-                 </div>`
-              : `<div class="field" style="flex-basis:${DEFW}px">
-                   <label for="kt-${p.id}-${ri}">${esc(m.n)} <span style="color:var(--ink-3)" id="ratio-${p.id}-${ri}"></span></label>
-                   <input class="val" type="number" id="kt-${p.id}-${ri}" value="${m.k}" data-p="${p.id}" data-k="konti" data-i="${i}" step="0.5" inputmode="decimal">
                  </div>`; }).join(''); })()}
-            ${EDIT?`<button class="mini keep" data-addm="${p.id}" style="padding:8px 11px;align-self:center">+ 원재료</button>`:''}
+            <button class="mini keep" data-addm="${p.id}" style="padding:8px 11px;align-self:center">+ 원재료</button>
           </div>
-          ${EDIT?`<div class="note">포장중량 <input type="number" value="${p.pack}" data-p="${p.id}" data-k="pack" step="any" inputmode="decimal"
+          <div class="note">포장중량 <input type="number" value="${p.pack}" data-p="${p.id}" data-k="pack" step="any" inputmode="decimal"
                      style="font:inherit;font-size:12px;width:72px;text-align:right;padding:2px 5px;background:var(--input-bg);border:1px solid var(--input-line);border-radius:5px;color:var(--ink)"> g/EA
-                   — 이 값과 적재량으로 P/LOT가 정해집니다.</div>`
-                 : `<div class="note">콘티단위 ${p.mats.filter(m=>!m.deleted).map(m=>esc(m.n)+' '+m.u+'kg').join(' · ')} — 배합비는 적재량 비율로 자동 역산됩니다.</div>`}
+                   — 이 값과 적재량으로 P/LOT가 정해집니다.</div>
         </details>
       </div>
     </div>`;
